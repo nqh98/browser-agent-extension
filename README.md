@@ -35,3 +35,12 @@ Chrome sẽ hiện thanh thông báo "đang gỡ lỗi trình duyệt" khi tác 
 - `browser.js`: thực thi các member tool của `browser_toolset_20260801`.
 - `page-agent.js`: đọc trang và quản lý tham chiếu `ref_N` trong isolated world.
 - `keys.js`: chuyển đổi phím sang Chrome DevTools Protocol.
+
+## Kiểm thử
+
+`tests/e2e/run.js` nạp extension vào Chromium qua Playwright, giả lập Claude API bằng các phản hồi kịch bản sẵn, và chạy mọi member tool trên một trang thử nghiệm cục bộ. Mỗi request gửi đi được kiểm tra theo quy tắc định dạng của `browser_toolset_20260801` (`toolset_name`, `browser_state`, thông báo dừng batch, kích thước ảnh). Không cần API key.
+
+```sh
+npm i -D playwright   # nếu chưa có
+node tests/e2e/run.js
+```

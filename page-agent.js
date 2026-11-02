@@ -60,6 +60,18 @@
     return TAG_ROLES[el.tagName] || '';
   }
 
+  /** Label text without the labelled control's own text (e.g. a wrapped select's options). */
+  function labelText(label, control) {
+    let text = '';
+    const walker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const parent = node.parentElement;
+      if (control.contains(node) || parent?.closest('select, textarea, script, style')) continue;
+      text += ` ${node.textContent}`;
+    }
+    return text;
+  }
+
   function nameOf(el, role) {
     const aria = el.getAttribute('aria-label');
     if (aria) return clean(aria);
@@ -70,7 +82,7 @@
       if (clean(text)) return clean(text);
     }
     if (el.labels?.length) {
-      const text = [...el.labels].map((l) => l.innerText).join(' ');
+      const text = [...el.labels].map((l) => labelText(l, el)).join(' ');
       if (clean(text)) return clean(text);
     }
     const attr = el.getAttribute('alt') || el.getAttribute('placeholder') || el.getAttribute('title');
@@ -262,7 +274,8 @@
       el.value = option.value;
       fire();
     } else if (el.type === 'checkbox' || el.type === 'radio') {
-      if (Boolean(value) !== el.checked) el.click();
+      const wanted = typeof value === 'string' ? !/^(false|0|off|no|unchecked)?$/i.test(value.trim()) : Boolean(value);
+      if (wanted !== el.checked) el.click();
     } else if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
       el.focus();
       el.value = String(value);

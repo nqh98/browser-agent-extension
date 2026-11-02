@@ -53,14 +53,21 @@ function keyDef(raw, shift) {
 }
 
 export function parseChord(chord) {
-  const parts = chord.endsWith('++') ? [...chord.slice(0, -2).split('+').filter(Boolean), '+'] : chord.split('+');
+  const parts = chord === '+' ? ['+'] : chord.endsWith('++') ? [...chord.slice(0, -2).split('+').filter(Boolean), '+'] : chord.split('+');
   const last = parts.pop();
   const modifiers = parts.map((part) => {
     const mod = MODIFIERS[part.toLowerCase()];
     if (!mod) throw new Error(`Unknown modifier: ${part}`);
     return mod;
   });
+  // A bare modifier ("shift", "ctrl") is a key of its own, held with its own flag set.
+  const alone = MODIFIERS[last.toLowerCase()];
+  if (alone) modifiers.push(alone);
   const mask = modifiers.reduce((sum, mod) => sum | mod.bit, 0);
+  if (alone) {
+    modifiers.pop();
+    return { modifiers, mask, def: { key: alone.key, code: alone.code, vk: alone.vk }, command: undefined };
+  }
   const def = keyDef(last, Boolean(mask & 8));
   if (mask & 7) delete def.text;
   const command = mask & 6 ? EDIT_COMMANDS[last.toLowerCase()] : undefined;
