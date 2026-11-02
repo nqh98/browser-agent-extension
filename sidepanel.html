@@ -37,6 +37,14 @@
     <label>Trang luôn được phép (mỗi dòng một tên miền)
       <textarea id="hosts" rows="3" spellcheck="false" placeholder="example.com"></textarea>
     </label>
+    <fieldset>
+      <legend>Tool tùy chọn (tắt mặc định)</legend>
+      <label class="check"><input type="checkbox" data-tool="read_console"> Đọc console của trang</label>
+      <label class="check"><input type="checkbox" data-tool="read_network"> Đọc các request mạng</label>
+      <label class="check"><input type="checkbox" data-tool="file_upload"> Tải lên tệp bạn đính kèm</label>
+      <label class="check"><input type="checkbox" data-tool="javascript_exec"> Chạy JavaScript trên trang</label>
+      <p class="muted">JavaScript chạy với toàn quyền của trang, gồm cookie và tài khoản đang đăng nhập. Chỉ bật khi dùng hồ sơ Chrome không đăng nhập tài khoản quan trọng. Tác tử chỉ tải lên được tệp bạn đính kèm bằng nút 📎.</p>
+    </fieldset>
     <p class="muted">API key được lưu không mã hóa trong hồ sơ Chrome này. Đừng dùng trên máy dùng chung.</p>
     <button type="submit">Lưu</button>
   </form>
@@ -45,7 +53,10 @@
     <p class="muted hint">Giao việc cho tác tử trên tab đang mở, ví dụ: "Tóm tắt trang này" hoặc "Tìm chuyến bay rẻ nhất tới Đà Nẵng".</p>
   </main>
 
+  <div id="attachments" hidden></div>
   <form id="composer">
+    <button id="attach" type="button" class="ghost" title="Đính kèm tệp để tác tử tải lên" hidden>📎</button>
+    <input id="files" type="file" multiple hidden>
     <textarea id="prompt" rows="2" placeholder="Bạn muốn làm gì trên trang này?"></textarea>
     <button id="send" type="submit">Gửi</button>
     <button id="stop" type="button" class="danger" hidden>Dừng</button>

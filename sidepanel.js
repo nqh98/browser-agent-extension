@@ -2,7 +2,8 @@ import { runTask } from './agent.js';
 import { BrowserExecutor } from './browser.js';
 
 const $ = (id) => document.getElementById(id);
-const DEFAULTS = { apiKey: '', model: 'claude-sonnet-5-5', mode: 'ask', approvedHosts: [] };
+const DEFAULTS = { apiKey: '', model: 'claude-sonnet-5-5', mode: 'ask', approvedHosts: [], tools: {} };
+const MAX_ATTACH_BYTES = 25 * 1024 * 1024;
 
 let settings = { ...DEFAULTS };
 let messages = [];
@@ -10,6 +11,8 @@ let controller = null;
 let executor = null;
 const totals = { input: 0, output: 0 };
 const pendingConfirms = new Set();
+const attachments = new Map(); // document_id -> File
+let nextDocument = 0;
 
 function append(className, text) {
   $('log').querySelector('.hint')?.remove();
@@ -38,6 +41,10 @@ function describeAction(name, input = {}) {
     switch_tab: `Chuyển sang ${input.tab_id}`,
     close_tab: `Đóng ${input.tab_id}`,
     list_tabs: 'Xem danh sách tab',
+    read_console: 'Đọc console',
+    read_network: 'Đọc request mạng',
+    file_upload: `Tải lên ${(input.document_ids || []).map((id) => attachments.get(String(id))?.name || id).join(', ')}`,
+    javascript_exec: 'Chạy JavaScript',
   };
   return parts[name] || `${name} ${target}`.trim();
 }
@@ -129,16 +136,31 @@ async function submitTask(text) {
   });
   executor.settings = settings;
 
+  executor.documents = attachments;
+  let request = text;
+  if (settings.tools.file_upload && attachments.size) {
+    const list = [...attachments].map(([id, file]) => `${id}: ${file.name} (${file.type || 'unknown type'}, ${file.size} bytes)`).join('; ');
+    request += `\n\n[Files the user attached for file_upload, by document_id: ${list}]`;
+  }
+
   try {
     await runTask({
-      text,
+      text: request,
       messages,
       settings,
       executor,
       signal: controller.signal,
       ui: {
         onText: (said) => append('msg', said),
-        onAction: (name, input) => append('action', describeAction(name, input)),
+        onAction: (name, input) => {
+          const node = append('action', describeAction(name, input));
+          if (name === 'javascript_exec') {
+            const code = document.createElement('span');
+            code.className = 'code';
+            code.textContent = String(input.text ?? '').slice(0, 4000);
+            node.append(code);
+          }
+        },
         onActionError: (_name, error) => append('error', String(error)),
         onNotice: (notice) => append('muted', notice),
         onUsage: (usage) => {
@@ -182,6 +204,8 @@ $('newChat').addEventListener('click', () => {
   $('log').replaceChildren();
   executor?.dispose();
   executor = null;
+  attachments.clear();
+  renderAttachments();
 });
 $('settings').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -189,6 +213,8 @@ $('settings').addEventListener('submit', async (event) => {
   settings.model = $('model').value.trim() || DEFAULTS.model;
   settings.mode = $('mode').value;
   settings.approvedHosts = $('hosts').value.split('\n').map((line) => line.trim()).filter(Boolean);
+  settings.tools = Object.fromEntries([...document.querySelectorAll('[data-tool]')].map((box) => [box.dataset.tool, box.checked]));
+  renderAttachments();
   await saveSettings();
   // Drop session approvals so a site removed from the list really loses access.
   if (!controller) {
@@ -205,5 +231,44 @@ $('settings').addEventListener('submit', async (event) => {
   $('model').value = settings.model;
   $('mode').value = settings.mode;
   $('hosts').value = settings.approvedHosts.join('\n');
+  settings.tools = { ...settings.tools };
+  for (const box of document.querySelectorAll('[data-tool]')) box.checked = Boolean(settings.tools[box.dataset.tool]);
+  renderAttachments();
   if (!settings.apiKey) $('settings').hidden = false;
 })();
+
+function renderAttachments() {
+  const enabled = Boolean(settings.tools?.file_upload);
+  $('attach').hidden = !enabled;
+  const box = $('attachments');
+  box.replaceChildren();
+  box.hidden = !enabled || !attachments.size;
+  for (const [id, file] of attachments) {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.textContent = `${id}: ${file.name}`;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'ghost';
+    remove.title = 'Bỏ tệp này';
+    remove.textContent = '×';
+    remove.addEventListener('click', () => { attachments.delete(id); renderAttachments(); });
+    chip.append(remove);
+    box.append(chip);
+  }
+}
+
+$('attach').addEventListener('click', () => $('files').click());
+$('files').addEventListener('change', () => {
+  let total = [...attachments.values()].reduce((sum, file) => sum + file.size, 0);
+  for (const file of $('files').files) {
+    if (total + file.size > MAX_ATTACH_BYTES) {
+      append('error', `Bỏ qua ${file.name}: tổng dung lượng tệp đính kèm vượt 25 MB.`);
+      continue;
+    }
+    total += file.size;
+    attachments.set(`doc-${++nextDocument}`, file);
+  }
+  $('files').value = '';
+  renderAttachments();
+});

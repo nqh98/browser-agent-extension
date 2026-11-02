@@ -68,7 +68,16 @@ input, select, textarea {
 .error { color: var(--danger); font-size: 13px; overflow-wrap: anywhere; }
 .card { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .card.sensitive { background: var(--warn-bg); }
-.card .detail { overflow-wrap: anywhere; font-size: 13px; }
+.card .detail { overflow-wrap: anywhere; font-size: 13px; white-space: pre-wrap; max-height: 240px; overflow-y: auto; }
 .card .buttons { display: flex; flex-wrap: wrap; gap: 6px; }
 #composer { display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px; border-top: 1px solid var(--border); }
 #composer textarea { resize: none; }
+
+fieldset { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; margin: 0; display: grid; gap: 4px; }
+legend { padding: 0 4px; }
+#settings label.check { display: flex; align-items: center; gap: 6px; font-weight: 400; }
+label.check input { width: auto; }
+#attachments { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 8px; }
+#attachments .chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); border-radius: 12px; padding: 1px 8px; font-size: 12px; }
+#attachments .chip button { padding: 0 4px; }
+.action .code { display: block; white-space: pre-wrap; font-family: monospace; font-size: 11px; opacity: .8; }

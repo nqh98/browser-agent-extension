@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Browser Agent (API key)",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Side panel agent that reads and operates web pages through your own Claude API key. Unofficial; not affiliated with Anthropic.",
   "minimum_chrome_version": "116",
-  "permissions": ["sidePanel", "debugger", "tabs", "storage", "scripting"],
+  "permissions": ["sidePanel", "debugger", "tabs", "storage", "scripting", "downloads"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
   "side_panel": { "default_path": "sidepanel.html" },
