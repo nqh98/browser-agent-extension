@@ -1,11 +1,17 @@
 // Executor for the Claude API browser toolset (browser_toolset_20260801).
 import { modifierMask, parseKeySequence } from './keys.js';
+import { ActivityLog, redactUrl } from './capture.js';
 
 const MAX_IMAGE_EDGE = 1456;
+const MAX_TEXT = 50000;
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+export const OPTIONAL_MEMBERS = ['javascript_exec', 'file_upload', 'read_console', 'read_network'];
+const FRAME_LINE = /^\u0001frame:(\d+):(\d+)$/;
 const TAB_MEMBERS = new Set(['new_tab', 'list_tabs', 'switch_tab', 'close_tab']);
 const WRITE_MEMBERS = new Set([
   'left_click', 'right_click', 'middle_click', 'double_click', 'triple_click', 'left_click_drag',
   'left_mouse_down', 'left_mouse_up', 'type', 'key', 'hold_key', 'form_input', 'close_tab',
+  'javascript_exec', 'file_upload',
 ]);
 const CLICK_COUNTS = {
   left_click: ['left', 1], right_click: ['right', 1], middle_click: ['middle', 1],
@@ -18,7 +24,18 @@ const UNSAFE_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
 // Best-effort only: catches common consequential actions in English and Vietnamese.
 const SENSITIVE = /\b(buy|purchase|pay|payment|checkout|place order|order now|delete|remove|send|submit|publish|post|transfer|confirm|sign up|subscribe|unsubscribe|accept|agree|install|authorize|grant)\b|mua|thanh toán|đặt hàng|xoá|xóa|gửi|đăng bài|đăng ký|chuyển khoản|chuyển tiền|xác nhận|đồng ý|hủy|huỷ|cấp quyền/i;
 
+// Best-effort only: code that can send data off the page, change the page's state, or read storage.
+const RISKY_JS = /\b(fetch|XMLHttpRequest|sendBeacon|WebSocket|EventSource|postMessage|cookie|localStorage|sessionStorage|indexedDB|caches|submit|click|dispatchEvent|location|open|eval|Function|import|navigator\.credentials|innerHTML|outerHTML|insertAdjacentHTML|document\.write|setAttribute|remove)\b|\.value\s*=(?!=)/;
+
 const sanitize = (value, max) => String(value || '').replace(UNSAFE_CHARS, ' ').slice(0, max);
+const pad = (n) => '  '.repeat(n);
+
+function capText(text, note = '') {
+  if (text.length <= MAX_TEXT) return text;
+  return `${text.slice(0, MAX_TEXT)}\n[Output truncated at ${MAX_TEXT} characters.${note}]`;
+}
+
+class FrameGoneError extends Error {}
 
 export function hostOf(url) {
   try {
@@ -80,6 +97,14 @@ export class BrowserExecutor {
     this.approved = new Set(settings.approvedHosts || []);
     this.autoRest = false;
     this.signal = null;
+    this.running = false;
+    this.documents = new Map(); // document_id -> File, attached by the user for file_upload
+    this.refMaps = new Map(); // tabId -> { next, byGlobal, byLocal }
+    this.deniedFrameHosts = new Set();
+    this.activity = new ActivityLog();
+    this.capturing = new Set();
+    this.downloads = new Set();
+    this.pendingChanges = [];
 
     this.handleCreated = (tab) => {
       if (tab.openerTabId === undefined || !this.managed.has(tab.openerTabId)) return;
@@ -91,6 +116,9 @@ export class BrowserExecutor {
     };
     this.handleRemoved = (tabId) => {
       this.managed.delete(tabId);
+      this.refMaps.delete(tabId);
+      this.capturing.delete(tabId);
+      this.activity.forget(tabId);
       this.attached.delete(tabId);
       this.views.delete(tabId);
       this.pendingOpened.delete(tabId);
@@ -98,15 +126,65 @@ export class BrowserExecutor {
     };
     this.handleDetach = (source, reason) => {
       this.attached.delete(source.tabId);
+      this.capturing.delete(source.tabId);
       if (reason === 'canceled_by_user') this.onDetachedByUser?.();
+    };
+    this.handleEvent = (source, method, params) => {
+      if (this.capturing.has(source.tabId)) this.activity.handle(source.tabId, method, params);
+    };
+    // Downloads carry no tab id, so every download that starts while a task runs is reported.
+    this.handleDownloadCreated = (item) => {
+      if (!this.running) return;
+      this.downloads.add(item.id);
+      this.pendingChanges.push({ type: 'download_started', download_id: `dl-${item.id}`, url: this.safeDownloadUrl(item.finalUrl || item.url) });
+    };
+    this.handleDownloadChanged = async (delta) => {
+      if (!this.downloads.has(delta.id)) return;
+      const state = delta.state?.current;
+      if (state !== 'complete' && state !== 'interrupted') return;
+      this.downloads.delete(delta.id);
+      const [item] = await chrome.downloads.search({ id: delta.id }).catch(() => []);
+      const url = this.safeDownloadUrl(item?.finalUrl || item?.url || '');
+      if (state === 'complete') {
+        const size = item?.fileSize >= 0 ? item.fileSize : item?.totalBytes;
+        this.pendingChanges.push({
+          type: 'download_completed', download_id: `dl-${delta.id}`, url,
+          ...(Number.isInteger(size) && size >= 0 ? { size_bytes: size } : {}),
+        });
+      } else {
+        const error = delta.error?.current || item?.error;
+        this.pendingChanges.push({ type: 'download_failed', download_id: `dl-${delta.id}`, url, ...(error ? { error: sanitize(error, 200) } : {}) });
+      }
     };
     chrome.tabs.onCreated.addListener(this.handleCreated);
     chrome.tabs.onRemoved.addListener(this.handleRemoved);
     chrome.debugger.onDetach.addListener(this.handleDetach);
+    chrome.debugger.onEvent.addListener(this.handleEvent);
+    chrome.downloads?.onCreated.addListener(this.handleDownloadCreated);
+    chrome.downloads?.onChanged.addListener(this.handleDownloadChanged);
+  }
+
+  enabled(member) {
+    return Boolean(this.settings.tools?.[member]);
+  }
+
+  safeDownloadUrl(url) {
+    // Download URLs often carry signed credentials in the query string.
+    try {
+      const parsed = new URL(url);
+      parsed.search = '';
+      parsed.hash = '';
+      parsed.username = '';
+      parsed.password = '';
+      return sanitize(parsed.href, 4096) || 'unknown';
+    } catch {
+      return sanitize(url, 4096) || 'unknown';
+    }
   }
 
   async beginTask(signal) {
     this.signal = signal;
+    this.running = true;
     this.autoRest = false;
     this.approved = new Set([...this.approved, ...(this.settings.approvedHosts || [])]);
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -117,6 +195,8 @@ export class BrowserExecutor {
   }
 
   async endTask() {
+    this.running = false;
+    this.capturing.clear();
     await Promise.all([...this.attached].map((tabId) => chrome.debugger.detach({ tabId }).catch(() => {})));
     this.attached.clear();
   }
@@ -125,6 +205,9 @@ export class BrowserExecutor {
     chrome.tabs.onCreated.removeListener(this.handleCreated);
     chrome.tabs.onRemoved.removeListener(this.handleRemoved);
     chrome.debugger.onDetach.removeListener(this.handleDetach);
+    chrome.debugger.onEvent.removeListener(this.handleEvent);
+    chrome.downloads?.onCreated.removeListener(this.handleDownloadCreated);
+    chrome.downloads?.onChanged.removeListener(this.handleDownloadChanged);
   }
 
   // ---- Result protocol ----
@@ -174,13 +257,25 @@ export class BrowserExecutor {
     }
   }
 
+  /** Adds tabs opened and download events since the last successful result. */
+  addChanges(state, opened = [...this.pendingOpened]) {
+    if (!state.tabs.length) return state; // keep events for a result that can carry them
+    const open = new Set(state.tabs.map((tab) => tab.tab_id));
+    const changes = opened.map((id) => `tab-${id}`).filter((id) => open.has(id))
+      .map((tab_id) => ({ type: 'tab_opened', tab_id }));
+    this.pendingOpened.clear();
+    // At most one entry per download: the latest event wins.
+    const latest = new Map();
+    for (const change of this.pendingChanges) latest.set(change.download_id, change);
+    this.pendingChanges = [];
+    changes.push(...latest.values());
+    if (changes.length) state.state_changes = changes.slice(0, 200);
+    return state;
+  }
+
   /** Text results carry the tab inventory plus any tabs opened during the call. */
   async withState(content) {
-    const state = await this.browserState();
-    const open = new Set(state.tabs.map((tab) => tab.tab_id));
-    const changes = [...this.pendingOpened].map((id) => `tab-${id}`).filter((id) => open.has(id));
-    this.pendingOpened.clear();
-    if (changes.length) state.state_changes = changes.map((tab_id) => ({ type: 'tab_opened', tab_id }));
+    const state = this.addChanges(await this.browserState());
     if (state.tabs.length) content.push(state);
     return content;
   }
@@ -189,6 +284,7 @@ export class BrowserExecutor {
 
   async dispatch(name, input) {
     if (this.signal?.aborted) throw new Error('Stopped by the user.');
+    if (OPTIONAL_MEMBERS.includes(name) && !this.enabled(name)) throw new Error(`${name} is not enabled in this environment.`);
     if (TAB_MEMBERS.has(name)) return this.tabMember(name, input);
 
     const tabId = this.resolveTab(input.tab_id);
@@ -201,6 +297,7 @@ export class BrowserExecutor {
     }
 
     await this.requireHost(tabId);
+    if (this.enabled('read_console') || this.enabled('read_network')) await this.startCapture(tabId);
     await this.gate(name, input, tabId);
 
     switch (name) {
@@ -208,17 +305,24 @@ export class BrowserExecutor {
         const image = await this.capture(tabId);
         return this.withState([{ type: 'text', text: 'Screenshot captured.' }, image]);
       }
-      case 'zoom': return [await this.capture(tabId, input.region)];
-      case 'read_page':
-        return this.textResult(await this.page(tabId, 'readPage', [{ filter: input.filter, depth: input.depth, ref: input.ref }]));
-      case 'find': return this.textResult(await this.page(tabId, 'find', [{ query: input.query }]));
-      case 'get_page_text': return this.textResult(await this.page(tabId, 'getPageText', []));
+      case 'zoom': {
+        const image = await this.capture(tabId, input.region);
+        return this.pendingChanges.length ? this.withState([image]) : [image];
+      }
+      case 'read_page': return this.textResult(await this.readPage(tabId, input));
+      case 'find': return this.textResult(await this.find(tabId, String(input.query ?? '')));
+      case 'get_page_text': return this.textResult(await this.pageText(tabId));
       case 'form_input':
         this.requireRef(input.target);
-        return this.textResult(await this.page(tabId, 'formInput', [input.target.ref, input.value]));
+        return this.textResult(await this.refCall(tabId, input.target.ref, 'formInput', [input.value]));
       case 'scroll_to':
         this.requireRef(input.target);
-        return this.textResult(await this.page(tabId, 'scrollTo', [input.target.ref]));
+        await this.locateRef(tabId, input.target.ref);
+        return this.textResult(`Scrolled ${input.target.ref} into view.`);
+      case 'file_upload': return this.textResult(await this.uploadFiles(tabId, input));
+      case 'javascript_exec': return this.textResult(await this.runJavaScript(tabId, input.text));
+      case 'read_console': return this.textResult(this.activity.readConsole(tabId));
+      case 'read_network': return this.textResult(this.activity.readNetwork(tabId));
       case 'type':
         await this.cdp(tabId, 'Input.insertText', { text: String(input.text ?? '') });
         return this.textResult(`Typed ${String(input.text ?? '').length} characters.`);
@@ -275,9 +379,7 @@ export class BrowserExecutor {
       this.managed.add(created.id);
       this.activeTab = created.id;
       this.pendingOpened.delete(created.id);
-      const state = await this.browserState();
-      state.state_changes = [{ type: 'tab_opened', tab_id: `tab-${created.id}` }];
-      return [state];
+      return [this.addChanges(await this.browserState(), [created.id])];
     }
     if (name === 'switch_tab') {
       const id = this.resolveTab(input.tab_id);
@@ -289,7 +391,7 @@ export class BrowserExecutor {
       await chrome.tabs.remove(id);
       this.handleRemoved(id);
     }
-    return [await this.browserState()];
+    return [this.addChanges(await this.browserState())];
   }
 
   // ---- Approvals ----
@@ -321,8 +423,11 @@ export class BrowserExecutor {
     const isEnter = name === 'key' && /\benter\b|\breturn\b/i.test(String(input.text));
     const sensitive = Boolean(
       info.secret
+      || info.foreignFrame
       || name === 'close_tab'
-      || (name !== 'type' && name !== 'key' && SENSITIVE.test(info.label))
+      || name === 'file_upload'
+      || (name === 'javascript_exec' && RISKY_JS.test(String(input.text)))
+      || (!['type', 'key', 'javascript_exec'].includes(name) && SENSITIVE.test(info.label))
       || (isEnter && info.inForm && SENSITIVE.test(haystack)),
     );
     if (!sensitive && (this.settings.mode === 'auto' || this.autoRest)) return;
@@ -338,11 +443,30 @@ export class BrowserExecutor {
 
   async describeAction(name, input, tabId) {
     if (name === 'close_tab') return { label: `tab ${input.tab_id}` };
-    if (name === 'type' || name === 'key' || name === 'hold_key') return this.page(tabId, 'describeFocus', []);
+    if (name === 'javascript_exec') return { label: 'JavaScript' };
+    if (name === 'type' || name === 'key' || name === 'hold_key') return this.describeIn(tabId, 'describeFocus', () => []);
     const target = input.target;
-    if (target?.type === 'ref') return this.page(tabId, 'describeRef', [target.ref]);
+    if (target?.type === 'ref') return this.refCall(tabId, target.ref, 'describeRef');
     const point = await this.point(tabId, target);
-    return this.page(tabId, 'describePoint', [point.x, point.y]);
+    return this.describeIn(tabId, 'describePoint', (info) => (info ? [info.x, info.y] : [point.x, point.y]));
+  }
+
+  /** Follows a describePoint/describeFocus answer down into child frames. */
+  async describeIn(tabId, method, argsFor) {
+    let info = await this.page(tabId, method, argsFor(null));
+    if (!(info.frame >= 0)) return info;
+    const tree = await this.frameTree(tabId);
+    let frame = tree.top;
+    while (info.frame >= 0) {
+      const child = tree.childOf(frame, info.frame);
+      if (!child) return info;
+      if (!(await this.frameAllowed(child, tree, false))) {
+        return { label: `nội dung trong khung nhúng từ ${hostOf(child.url) || 'trang khác'}`, secret: false, foreignFrame: true };
+      }
+      frame = child;
+      info = await this.page(tabId, method, argsFor(info), frame);
+    }
+    return info;
   }
 
   describeForUser(name, input, info) {
@@ -352,6 +476,11 @@ export class BrowserExecutor {
     if (name === 'key' || name === 'hold_key') return `Nhấn phím ${input.text} tại ${info.label}`;
     if (name === 'form_input') return `Đặt ${info.label} = ${info.secret ? '[ẩn]' : `"${String(input.value).slice(0, 200)}"`}`;
     if (name === 'close_tab') return `Đóng ${info.label}`;
+    if (name === 'javascript_exec') return `Chạy JavaScript trên trang:\n${String(input.text).slice(0, 1500)}`;
+    if (name === 'file_upload') {
+      const names = (input.document_ids || []).map((id) => this.documents.get(String(id))?.name || id);
+      return `Tải lên ${names.join(', ') || '(không có tệp)'} vào ${info.label}`;
+    }
     return `${name} trên ${info.label}`;
   }
 
@@ -384,22 +513,309 @@ export class BrowserExecutor {
     return chrome.debugger.sendCommand({ tabId }, method, params);
   }
 
-  async page(tabId, method, args) {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['page-agent.js'] });
-    const [frame] = await chrome.scripting.executeScript({
-      target: { tabId },
-      args: [method, args],
-      func: (m, a) => {
-        try {
-          return { value: globalThis.__browserAgent[m](...a) };
-        } catch (error) {
-          return { error: error.message };
-        }
-      },
+  /** Calls a page-agent method in one frame (the top frame by default). */
+  async page(tabId, method, args, frame) {
+    const target = frame?.documentId ? { tabId, documentIds: [frame.documentId] } : { tabId, frameIds: [frame?.frameId ?? 0] };
+    let result;
+    try {
+      await chrome.scripting.executeScript({ target, files: ['page-agent.js'] });
+      [result] = await chrome.scripting.executeScript({
+        target,
+        args: [method, args],
+        func: (m, a) => {
+          try {
+            return { value: globalThis.__browserAgent[m](...a) };
+          } catch (error) {
+            return { error: error.message };
+          }
+        },
+      });
+    } catch (error) {
+      if (frame?.documentId) throw new FrameGoneError('The frame has navigated or closed.');
+      throw error;
+    }
+    if (!result?.result) throw new Error('The page did not respond.');
+    if (result.result.error) throw new Error(result.result.error);
+    return result.result.value;
+  }
+
+  // ---- Frames and references ----
+
+  /**
+   * Lists the tab's frames with their parent and their index among the parent's <iframe>
+   * elements. Chrome cannot map an element to a frameId directly, so each frame posts a
+   * random token to its child windows and each child reports the token it received.
+   */
+  async frameTree(tabId) {
+    const all = { tabId, allFrames: true };
+    await chrome.scripting.executeScript({ target: all, files: ['page-agent.js'] });
+    const probes = await chrome.scripting.executeScript({ target: all, func: () => globalThis.__browserAgent?.probeFrames() });
+    const owners = new Map();
+    for (const p of probes) if (p.result?.token) owners.set(p.result.token, p.frameId);
+
+    let who = [];
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await this.sleep(40);
+      who = await chrome.scripting.executeScript({ target: all, func: () => globalThis.__browserAgent?.whoAmI() });
+      const matched = who.every((w) => w.frameId === 0 || owners.has(String(w.result?.probe).split(':')[0]));
+      if (matched) break;
+    }
+    const frames = new Map();
+    for (const w of who) {
+      if (!w.result) continue;
+      frames.set(w.frameId, {
+        frameId: w.frameId, documentId: w.documentId, url: w.result.url,
+        visible: w.result.width >= 2 && w.result.height >= 2, parent: null, index: null,
+      });
+    }
+    for (const w of who) {
+      const frame = frames.get(w.frameId);
+      if (!frame || w.frameId === 0) continue;
+      const [token, index] = String(w.result.probe).split(':');
+      const parent = frames.get(owners.get(token));
+      if (parent) {
+        frame.parent = parent;
+        frame.index = Number(index);
+      } else {
+        frames.delete(w.frameId); // unmatched frames cannot be placed or located safely
+      }
+    }
+    const top = frames.get(0);
+    if (!top) throw new Error('The page did not respond.');
+    const ordered = [];
+    const visit = (frame) => {
+      ordered.push(frame);
+      [...frames.values()].filter((f) => f.parent === frame).sort((a, b) => a.index - b.index).forEach(visit);
+    };
+    visit(top);
+    return {
+      top,
+      topHost: hostOf(top.url),
+      ordered: ordered.filter((f) => f === top || ordered.includes(f.parent)),
+      childOf: (parent, index) => [...frames.values()].find((f) => f.parent === parent && f.index === index),
+    };
+  }
+
+  /**
+   * Frames from the page's own host and about:blank/srcdoc frames are part of the page.
+   * Frames from other sites need the user's approval, like a site the agent navigates to.
+   */
+  async frameAllowed(frame, tree, ask) {
+    for (let f = frame; f?.parent; f = f.parent) {
+      if (/^about:/i.test(f.url)) continue;
+      const host = hostOf(f.url);
+      if (!host) return false;
+      if (host === tree.topHost || this.approved.has(host)) continue;
+      if (!ask || this.deniedFrameHosts.has(host)) return false;
+      const answer = await this.confirm({
+        kind: 'site',
+        title: `Cho phép tác tử đọc khung nhúng từ ${host}?`,
+        detail: 'Trang này nhúng nội dung từ một trang khác. Nội dung trong khung sẽ được gửi tới Claude API và tác tử có thể thao tác trong đó.',
+      });
+      if (answer === 'deny') {
+        this.deniedFrameHosts.add(host);
+        return false;
+      }
+      this.approved.add(host);
+      if (answer === 'always') await this.persistHost?.(host);
+    }
+    return true;
+  }
+
+  refState(tabId) {
+    if (!this.refMaps.has(tabId)) this.refMaps.set(tabId, { next: 0, byGlobal: new Map(), byLocal: new Map() });
+    return this.refMaps.get(tabId);
+  }
+
+  /** Rewrites a frame's local "[ref_N]" tags to tab-wide references that never get reused. */
+  globalize(tabId, frame, text) {
+    const refs = this.refState(tabId);
+    return String(text).replace(/\[(ref_\d+)\]/g, (_, local) => {
+      const key = `${frame.documentId}|${local}`;
+      let ref = refs.byLocal.get(key);
+      if (!ref) {
+        ref = `ref_${++refs.next}`;
+        refs.byLocal.set(key, ref);
+        refs.byGlobal.set(ref, { frame, local });
+      }
+      return `[${ref}]`;
     });
-    if (!frame?.result) throw new Error('The page did not respond.');
-    if (frame.result.error) throw new Error(frame.result.error);
-    return frame.result.value;
+  }
+
+  staleRef(ref) {
+    return new Error(`${ref} is stale or not found on the current page. Re-read the page to get fresh references.`);
+  }
+
+  resolveRef(tabId, ref) {
+    const entry = this.refMaps.get(tabId)?.byGlobal.get(String(ref));
+    if (!entry) throw this.staleRef(ref);
+    return entry;
+  }
+
+  /** Calls a page-agent method whose first argument is a reference, in the reference's frame. */
+  async refCall(tabId, ref, method, args = []) {
+    const { frame, local } = this.resolveRef(tabId, ref);
+    const localName = new RegExp(`\\b${local}\\b`, 'g');
+    try {
+      const value = await this.page(tabId, method, [local, ...args], frame);
+      return typeof value === 'string' ? value.replace(localName, ref) : value;
+    } catch (error) {
+      if (error instanceof FrameGoneError) throw this.staleRef(ref);
+      throw new Error(String(error.message).replace(localName, ref));
+    }
+  }
+
+  /** Viewport point of a reference, scrolling it (and every enclosing frame) into view. */
+  async locateRef(tabId, ref) {
+    const { frame } = this.resolveRef(tabId, ref);
+    let point = await this.refCall(tabId, ref, 'locate');
+    try {
+      for (let f = frame; f.parent; f = f.parent) {
+        point = await this.page(tabId, 'framePoint', [f.index, point.x, point.y], f.parent);
+      }
+    } catch (error) {
+      if (error instanceof FrameGoneError) throw this.staleRef(ref);
+      throw error;
+    }
+    return point;
+  }
+
+  async readPage(tabId, input) {
+    const tree = await this.frameTree(tabId);
+    let start = tree.top;
+    let localRef;
+    if (input.ref) ({ frame: start, local: localRef } = this.resolveRef(tabId, input.ref));
+    const lines = [];
+    const render = async (frame, ref, depth, indent) => {
+      let text;
+      try {
+        text = await this.page(tabId, 'readPage', [{ filter: input.filter, depth, ref }], frame);
+      } catch (error) {
+        if (ref) throw (error instanceof FrameGoneError ? this.staleRef(input.ref) : new Error(String(error.message).replace(new RegExp(`\\b${ref}\\b`, 'g'), input.ref)));
+        lines.push(`${pad(indent)}(frame content unavailable)`);
+        return;
+      }
+      for (const line of this.globalize(tabId, frame, text).split('\n')) {
+        const marker = FRAME_LINE.exec(line);
+        if (!marker) {
+          if (frame !== start && line === 'No matching visible elements.') continue;
+          lines.push(pad(indent) + line);
+          continue;
+        }
+        const level = Number(marker[2]);
+        const child = tree.childOf(frame, Number(marker[1]));
+        if (!child) {
+          lines.push(`${pad(indent + level)}(frame content unavailable)`);
+        } else if (!(await this.frameAllowed(child, tree, true))) {
+          lines.push(`${pad(indent + level)}(content from ${hostOf(child.url)} not shown: the user did not allow this site)`);
+        } else {
+          await render(child, undefined, depth - level, indent + level);
+        }
+      }
+    };
+    await render(start, localRef, Math.max(1, Number(input.depth) || 15), 0);
+    return capText(lines.join('\n'), ' Use a smaller depth or a ref to narrow the read.');
+  }
+
+  async find(tabId, query) {
+    const tree = await this.frameTree(tabId);
+    const matches = [];
+    const skipped = new Set();
+    for (const frame of tree.ordered) {
+      if (frame !== tree.top && !frame.visible) continue;
+      if (!(await this.frameAllowed(frame, tree, false))) {
+        skipped.add(hostOf(frame.url));
+        continue;
+      }
+      const found = await this.page(tabId, 'find', [{ query, raw: true }], frame).catch(() => []);
+      const where = frame === tree.top ? '' : ` (in frame from ${hostOf(frame.url) || 'this page'})`;
+      for (const m of found) matches.push({ score: m.score, line: this.globalize(tabId, frame, m.line) + where });
+    }
+    matches.sort((a, b) => b.score - a.score); // stable: top frame first on ties
+    let text = matches.slice(0, 20).map((m) => m.line).join('\n') || `No elements matched "${query}". Try read_page or a screenshot.`;
+    skipped.delete(null);
+    if (skipped.size) text += `\n[Frames from ${[...skipped].join(', ')} were not searched because the user has not allowed those sites. read_page asks for access.]`;
+    return text;
+  }
+
+  async pageText(tabId) {
+    const tree = await this.frameTree(tabId);
+    const parts = [];
+    for (const frame of tree.ordered) {
+      if (frame !== tree.top && (!frame.visible || !(await this.frameAllowed(frame, tree, false)))) continue;
+      const text = await this.page(tabId, 'getPageText', [], frame).catch(() => '');
+      if (frame === tree.top) parts.push(text);
+      else if (text && text !== 'The page has no visible text.') parts.push(`--- Frame: ${redactUrl(frame.url)} ---\n${text}`);
+    }
+    return capText(parts.join('\n\n'));
+  }
+
+  // ---- Optional members ----
+
+  async uploadFiles(tabId, input) {
+    this.requireRef(input.target);
+    const ids = (input.document_ids || []).map(String);
+    const available = [...this.documents].map(([id, file]) => `${id} (${file.name})`).join(', ') || 'none';
+    if (input.paths?.length) {
+      throw new Error(`Uploading by path is not supported here. Use document_ids of files the user attached. Attached: ${available}.`);
+    }
+    if (!ids.length) throw new Error(`file_upload needs document_ids. Attached: ${available}.`);
+    const files = ids.map((id) => {
+      const file = this.documents.get(id);
+      if (!file) throw new Error(`Unknown document_id ${id}. Attached: ${available}.`);
+      return file;
+    });
+    if (files.reduce((sum, file) => sum + file.size, 0) > MAX_UPLOAD_BYTES) throw new Error('The files are larger than 25 MB in total.');
+    const payload = await Promise.all(files.map(async (file) => ({
+      name: file.name, type: file.type, lastModified: file.lastModified, data: toBase64(await file.arrayBuffer()),
+    })));
+    const text = await this.refCall(tabId, input.target.ref, 'setFiles', [payload]);
+    await this.settle(tabId);
+    return text;
+  }
+
+  async runJavaScript(tabId, code) {
+    const group = 'browser-agent';
+    const fail = (details) => new Error(`JavaScript error: ${String(details.exception?.description || details.text).slice(0, 2000)}`);
+    try {
+      // replMode allows top-level await; a returned promise is awaited separately below.
+      let response = await this.cdp(tabId, 'Runtime.evaluate', {
+        expression: String(code ?? ''), objectGroup: group, awaitPromise: true, userGesture: true, replMode: true, timeout: 10000,
+      });
+      if (response.exceptionDetails) throw fail(response.exceptionDetails);
+      let r = response.result;
+      if (r.subtype === 'promise') {
+        response = await this.cdp(tabId, 'Runtime.awaitPromise', { promiseObjectId: r.objectId, returnByValue: true });
+        if (response.exceptionDetails) throw fail(response.exceptionDetails);
+        r = response.result;
+      } else if (r.objectId && !['node', 'function', 'error', 'window'].includes(r.subtype) && r.type !== 'function') {
+        response = await this.cdp(tabId, 'Runtime.callFunctionOn', {
+          objectId: r.objectId, functionDeclaration: 'function () { return this; }', returnByValue: true,
+        }).catch(() => ({ result: r }));
+        r = response.result;
+      }
+      let text;
+      if (r.type === 'undefined') text = 'undefined';
+      else if ('unserializableValue' in r) text = r.unserializableValue;
+      else if (r.type === 'string') text = r.value;
+      else if ('value' in r) text = JSON.stringify(r.value, null, 2) ?? String(r.value);
+      else text = r.description || `[${r.subtype || r.type}]`;
+      await this.settle(tabId);
+      return capText(text);
+    } finally {
+      await chrome.debugger.sendCommand({ tabId }, 'Runtime.releaseObjectGroup', { objectGroup: group }).catch(() => {});
+    }
+  }
+
+  async startCapture(tabId) {
+    if (this.capturing.has(tabId)) return;
+    await this.attach(tabId);
+    if (this.enabled('read_console')) {
+      await chrome.debugger.sendCommand({ tabId }, 'Runtime.enable');
+      await chrome.debugger.sendCommand({ tabId }, 'Log.enable');
+    }
+    if (this.enabled('read_network')) await chrome.debugger.sendCommand({ tabId }, 'Network.enable');
+    this.capturing.add(tabId);
   }
 
   async viewport(tabId) {
@@ -415,7 +831,7 @@ export class BrowserExecutor {
 
   /** Converts a target to CSS viewport pixels. Claude's coordinates are screenshot pixels. */
   async point(tabId, target) {
-    if (target?.type === 'ref') return this.page(tabId, 'locate', [target.ref]);
+    if (target?.type === 'ref') return this.locateRef(tabId, target.ref);
     if (target?.type !== 'coordinate') throw new Error('Invalid target.');
     const view = this.views.get(tabId) || await this.viewport(tabId);
     const { x, y } = target;

@@ -41,12 +41,24 @@ export function prepareMessages(messages) {
   return copy;
 }
 
-export function buildRequest(model, messages) {
+const OPTIONAL_MEMBERS = ['javascript_exec', 'file_upload', 'read_console', 'read_network'];
+
+/** The toolset entry; optional members are listed in configs only when the user enabled them. */
+export function toolsetEntry(tools = {}) {
+  const enabled = OPTIONAL_MEMBERS.filter((name) => tools[name]);
+  if (!enabled.length) return { type: 'browser_toolset_20260801' };
+  return {
+    type: 'browser_toolset_20260801',
+    configs: Object.fromEntries(enabled.map((name) => [name, { enabled: true }])),
+  };
+}
+
+export function buildRequest(model, messages, tools) {
   return {
     model,
     max_tokens: 4096,
     system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
-    tools: [{ type: 'browser_toolset_20260801' }],
+    tools: [toolsetEntry(tools)],
     messages: prepareMessages(messages),
   };
 }
@@ -116,7 +128,7 @@ export async function runTask({ text, messages, settings, executor, signal, ui }
   try {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       if (signal.aborted) return;
-      const response = await callApi(settings.apiKey, buildRequest(settings.model, messages), signal);
+      const response = await callApi(settings.apiKey, buildRequest(settings.model, messages, settings.tools), signal);
       ui.onUsage?.(response.usage);
       messages.push({ role: 'assistant', content: response.content });
 

@@ -108,7 +108,10 @@ let current = '';
         prompts.push({ title, detail, sensitive });
         const choice = policy(title, detail, sensitive);
         if (choice === 'STOP') await panel.click('#stop');
-        else await card.$(`button:text-is("${choice}")`).then((b) => b.click());
+        else {
+          const button = await card.$(`button:text-is("${choice}")`) || await card.$('button:text-is("Từ chối")');
+          await button.click();
+        }
       }
       if (opts.duringRun) { const fn = opts.duringRun; opts.duringRun = null; await fn(); }
       const done = await panel.evaluate(() => !document.getElementById('send').hidden);
@@ -131,10 +134,13 @@ let current = '';
   let r = await runTask('read', 'Tóm tắt trang này', [
     [say('Đọc trang.'), tu('read_page'), tu('read_page', { filter: 'interactive' }), tu('get_page_text'), tu('find', { query: 'search box' }), tu('screenshot'), tu('zoom', { region: [0, 0, 400, 200] }), tu('list_tabs')],
     [say('Trang là Test Shop.')],
-  ], { policy: (t) => (t.startsWith('Cho phép tác tử dùng') ? 'Cho phép đến khi tạo chat mới' : 'Cho phép') });
+  ], { policy: (t) => (t.startsWith('Cho phép tác tử dùng') ? 'Cho phép đến khi tạo chat mới' : 'Từ chối') });
   let rs = resultsOf(r);
   check('site approval prompt shown once for host', r.prompts.filter((p) => p.title.includes(H)).length === 1, JSON.stringify(r.prompts));
-  check('read-only actions need no per-action approval', r.prompts.length === 1, JSON.stringify(r.prompts));
+  check('cross-site frame asks separately', r.prompts.some((p) => /khung nhúng từ localhost:8123/.test(p.title)), JSON.stringify(r.prompts));
+  check('read-only actions need no per-action approval', r.prompts.length === 2, JSON.stringify(r.prompts));
+  check('denied frame shown as placeholder, its text not leaked', /content from localhost:8123 not shown/.test(textOf(rs[0])) && !/Partner secret/.test(textOf(rs[0])) && !/Partner secret/.test(textOf(rs[2])), textOf(rs[0]));
+  check('same-origin srcdoc frame nested in read_page', /iframe "Same frame" \[ref_\d+\]\n\s+button "Frame button" \[ref_\d+\]/.test(textOf(rs[0])), textOf(rs[0]));
   check('all 7 read calls succeeded', rs.length === 7 && rs.every((x) => !x.is_error), rs.map((x) => x.is_error && textOf(x)).join(' | '));
   check('read_page lists heading/button/textbox with refs', /heading "Test Shop Home" \[ref_\d+\] level=1/.test(textOf(rs[0])) && /button "Delete account" \[ref_/.test(textOf(rs[0])) && /textbox "Full name"/.test(textOf(rs[0])), textOf(rs[0]));
   check('read_page reports password as hidden-capable field', /textbox "Password" \[ref_\d+\].*type=password/.test(textOf(rs[0])), textOf(rs[0]));
@@ -362,7 +368,126 @@ let current = '';
 
   // ---------- 12. iframe limitation ----------
   r = await runTask('iframe', 'iframe', [[tu('find', { query: 'Frame button' })], [say('ok')]]);
-  check('(known limit) iframe content not found by find', !/Frame button/.test(textOf(resultsOf(r)[0])), textOf(resultsOf(r)[0]));
+  check('find reaches into same-origin frame', /button "Frame button" \[ref_\d+\] \(in frame from this page\)/.test(textOf(resultsOf(r)[0])), textOf(resultsOf(r)[0]));
+
+  // ---------- 13. iframes ----------
+  await newChat();
+  const frameOf = (re) => site.frames().find((f) => re.test(f.url()));
+  r = await runTask('frames', 'Khung', [
+    [tu('read_page', { filter: 'interactive' })],
+    (prev) => {
+      const t = textOf(prev[0]);
+      return [
+        tu('left_click', { target: { type: 'ref', ref: refIn(t, /button "Frame button"/) } }),
+        tu('form_input', { target: { type: 'ref', ref: refIn(t, /textbox "Frame input"/) }, value: 'hello frame' }),
+        tu('left_click', { target: { type: 'ref', ref: refIn(t, /button "Cross button"/) } }),
+        tu('left_click', { target: { type: 'ref', ref: refIn(t, /button "Nested button"/) } }),
+        tu('scroll_to', { target: { type: 'ref', ref: refIn(t, /button "Nested button"/) } }),
+        tu('get_page_text'),
+        tu('find', { query: 'nested button' }),
+      ];
+    },
+    [say('ok')],
+  ], { policy: (t) => (/khung nhúng/.test(t) ? 'Cho phép đến khi tạo chat mới' : 'Cho phép') });
+  rs = resultsOf(r);
+  const ft = textOf(rs[0]);
+  check('approved cross-site frame and its nested frame appear in read_page', /iframe "Partner widget" \[ref_\d+\]\n\s+button "Cross button"[^\n]*\n\s+iframe "Nested" \[ref_\d+\]\n\s+button "Nested button"/.test(ft), ft);
+  check('refs are unique across frames', (() => { const all = [...ft.matchAll(/\[(ref_\d+)\]/g)].map((m) => m[1]); return new Set(all).size === all.length; })(), ft);
+  check('frame actions succeeded', rs.slice(1, 8).every((x) => !x.is_error), rs.slice(1, 8).map(textOf).join(' | '));
+  check('click by ref in same-origin frame', (await G(() => window.frameClicked)) === 1, String(await G(() => window.frameClicked)));
+  check('form_input in frame', (await G(() => window.frameInput)) === 'hello frame', String(await G(() => window.frameInput)));
+  const cross = frameOf(/framepage/);
+  check('click by ref in cross-site frame (border/padding offsets)', (await cross.evaluate(() => window.crossClicked)) === 1);
+  check('click by ref in nested frame', (await cross.evaluate(() => window.nestedClicked)) === 1);
+  check('get_page_text includes approved frame text', /--- Frame: http:\/\/localhost:8123\/framepage ---\n[\s\S]*Partner secret text/.test(textOf(rs[6])), textOf(rs[6]).slice(-400));
+  check('find in nested frame labels the frame', /Nested button" \[ref_\d+\] \(in frame from (this page|localhost:8123)\)/.test(textOf(rs[7])), textOf(rs[7]));
+  const r2 = await runTask('frames-reload', 'Tải lại', [
+    [tu('navigate', { url: 'reload' })],
+    [tu('left_click', { target: { type: 'ref', ref: refIn(ft, /button "Cross button"/) } })],
+    [say('ok')],
+  ]);
+  check('frame ref stale after reload', resultsOf(r2)[1].is_error && /is stale or not found/.test(textOf(resultsOf(r2)[1])), textOf(resultsOf(r2)[1]));
+
+  // coordinate click into a frame from a site the user denied is treated as sensitive
+  await newChat();
+  await site.evaluate(() => document.getElementById('cross').scrollIntoView());
+  const crossPoint = await site.$eval('#cross', (e) => { const b = e.getBoundingClientRect(); return { x: Math.round(b.left + 60), y: Math.round(b.top + 80) }; });
+  r = await runTask('frames-deny', 'Khung từ chối', [
+    [tu('read_page')],
+    [tu('find', { query: 'cross button' })],
+    [tu('left_click', { target: { type: 'coordinate', ...crossPoint } })],
+    [say('ok')],
+  ], { policy: (t, d, sens) => (/khung nhúng/.test(t) ? 'Từ chối' : sens ? 'Từ chối' : 'Cho phép') });
+  rs = resultsOf(r);
+  check('find skips denied frames and says so', /were not searched/.test(textOf(rs[1])) && !/Cross button/.test(textOf(rs[1])), textOf(rs[1]));
+  check('coordinate click into denied frame asks as sensitive', r.prompts.some((p) => p.sensitive && /khung nhúng từ localhost/.test(p.detail)), JSON.stringify(r.prompts));
+
+  // ---------- 14. Optional tools ----------
+  await panel.click('#toggleSettings');
+  for (const tool of ['read_console', 'read_network', 'file_upload', 'javascript_exec']) await panel.check(`[data-tool=${tool}]`);
+  await panel.selectOption('#mode', 'auto');
+  await panel.click('#settings button[type=submit]');
+  check('attach button appears when file_upload enabled', await panel.isVisible('#attach'));
+  await panel.setInputFiles('#files', [{ name: 'cv.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 test') }, { name: 'photo.png', mimeType: 'image/png', buffer: Buffer.alloc(2048, 1) }]);
+  check('attached files listed as chips', (await panel.textContent('#attachments')).includes('doc-1: cv.pdf'), await panel.textContent('#attachments'));
+
+  await site.evaluate(() => window.scrollTo(0, 0));
+  r = await runTask('optional', 'Tool tùy chọn', [
+    [tu('screenshot')],
+    [tu('javascript_exec', { text: 'document.title' }), tu('javascript_exec', { text: '[1, 2, 3].map((x) => x * 2)' }), tu('javascript_exec', { text: 'await new Promise((r) => setTimeout(() => r(5), 100))' }), tu('javascript_exec', { text: "console.log('hello from page', {a: 1}); console.error('failed with token=abc123 Bearer abcdefghijklmnop'); 'logged'" })],
+    [tu('javascript_exec', { text: "fetch('/api/data?token=supersecret&page=2').then((r) => r.status)" })],
+    [tu('wait', { duration: 1 })],
+    [tu('read_console'), tu('read_console'), tu('read_network')],
+    [tu('javascript_exec', { text: 'nosuchvar.foo' })],
+    [tu('javascript_exec', { text: "document.getElementById('hello').click()" })],
+    [tu('find', { query: 'upload document' })],
+    (prev) => [tu('file_upload', { target: { type: 'ref', ref: refIn(textOf(prev[0]), /Upload document/) }, document_ids: ['doc-1', 'doc-2'] })],
+    (prev) => [tu('file_upload', { target: { type: 'ref', ref: 'ref_1' }, paths: ['/etc/passwd'] })],
+    [tu('file_upload', { target: { type: 'ref', ref: 'ref_1' }, document_ids: ['doc-99'] })],
+    [say('ok')],
+  ], { policy: (t, d, sens) => (sens && /click\(\)/.test(d) ? 'Từ chối' : 'Cho phép') });
+  rs = resultsOf(r);
+  const firstReq = r.requests[0];
+  check('request lists enabled optional members in configs', JSON.stringify(firstReq.tools[0].configs) === JSON.stringify({ javascript_exec: { enabled: true }, file_upload: { enabled: true }, read_console: { enabled: true }, read_network: { enabled: true } }), JSON.stringify(firstReq.tools));
+  check('attached files described in user message', /doc-1: cv\.pdf \(application\/pdf, 13 bytes\); doc-2: photo\.png/.test(JSON.stringify(firstReq.messages.at(-1))), JSON.stringify(firstReq.messages.at(-1)).slice(0, 400));
+  check('javascript_exec string result', textOf(rs[1]) === 'Test Shop', textOf(rs[1]));
+  check('javascript_exec JSON result', textOf(rs[2]).replace(/\s/g, '') === '[2,4,6]', textOf(rs[2]));
+  check('javascript_exec awaits promises', textOf(rs[3]) === '5', textOf(rs[3]));
+  check('javascript_exec fetch ran', textOf(rs[5]) === '200', textOf(rs[5]));
+  const con = textOf(rs[7]);
+  check('read_console shows log and error lines', /\[log\] hello from page \{a: 1\}/.test(con) && /\[error\] failed with token=/.test(con), con);
+  check('read_console redacts secrets', !/abc123|abcdefghijklmnop/.test(con) && /REDACTED/.test(con), con);
+  check('read_console returns only new entries', /No console entries since the last read/.test(textOf(rs[8])), textOf(rs[8]));
+  const net = textOf(rs[9]);
+  check('read_network lists request with status/mime/timing', /GET 200 application\/json \d+ms http:\/\/127\.0\.0\.1:8123\/api\/data\?token=REDACTED&page=2/.test(net), net);
+  check('read_network redacts token', !/supersecret/.test(net), net);
+  check('javascript_exec error reported', rs[10].is_error && /JavaScript error: ReferenceError: nosuchvar is not defined/.test(textOf(rs[10])), textOf(rs[10]));
+  check('risky JavaScript asks even in auto mode, code shown', r.prompts.some((p) => p.sensitive && /getElementById\('hello'\)\.click\(\)/.test(p.detail)), JSON.stringify(r.prompts));
+  check('declined JavaScript not run', rs[11].is_error && !(await G(() => window.helloClicks > 1)), textOf(rs[11]));
+  check('plain JavaScript runs without asking in auto mode', !r.prompts.some((p) => /document\.title/.test(p.detail)), JSON.stringify(r.prompts));
+  check('file_upload asks with file names', r.prompts.some((p) => p.sensitive && /cv\.pdf, photo\.png/.test(p.detail)), JSON.stringify(r.prompts));
+  check('file_upload set files on input', JSON.stringify(await G(() => window.uploaded)) === JSON.stringify(['cv.pdf:13', 'photo.png:2048']), JSON.stringify(await G(() => window.uploaded)) + textOf(rs[13]));
+  check('file_upload paths refused', rs[14].is_error && /Uploading by path is not supported/.test(textOf(rs[14])), textOf(rs[14]));
+  check('file_upload unknown id refused', rs[15].is_error && /Unknown document_id doc-99/.test(textOf(rs[15])), textOf(rs[15]));
+  check('JavaScript code shown in panel log', r.log.some((l) => l.includes('Chạy JavaScript') && l.includes('document.title')), r.log.filter((l) => l.includes('JavaScript')).join('\n'));
+  check('no format errors (optional tools)', r.newErrors === 0, formatErrors.concat(scriptErrors).join('\n'));
+
+  // ---------- 15. Downloads ----------
+  r = await runTask('downloads', 'Tải xuống', [
+    [tu('find', { query: 'download report' })],
+    (prev) => [tu('left_click', { target: { type: 'ref', ref: refIn(textOf(prev[0]), /Download report/) } })],
+    [tu('wait', { duration: 1 })],
+    [tu('zoom', { region: [0, 0, 100, 100] })],
+    [say('ok')],
+  ]);
+  rs = resultsOf(r);
+  const changes = rs.flatMap((x) => (Array.isArray(x.content) ? x.content : []).filter((b) => b.type === 'browser_state').flatMap((b) => b.state_changes || []));
+  const started = changes.find((c) => c.type === 'download_started');
+  const done = changes.find((c) => c.type === 'download_completed');
+  check('download reported (started or completed)', started || done, JSON.stringify(changes));
+  check('download completed with size and no path', done && done.size_bytes === 8 && !('path' in done) && /\/download$/.test(done.url), JSON.stringify(changes));
+  check('each download event reported once', changes.filter((c) => c.type === 'download_completed').length === 1, JSON.stringify(changes));
+  check('no format errors (downloads)', r.newErrors === 0, formatErrors.concat(scriptErrors).join('\n'));
 
   console.log('\nFORMAT ERRORS:', formatErrors.length ? `\n${formatErrors.join('\n')}` : 'none');
   console.log('SCRIPT ERRORS:', scriptErrors.length ? `\n${scriptErrors.join('\n')}` : 'none');

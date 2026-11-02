@@ -30,15 +30,26 @@ function checkState(s, where, errs) {
   }
   if ('state_changes' in s) {
     if (!Array.isArray(s.state_changes) || !s.state_changes.length) errs.push(`${where}: empty state_changes`);
+    const ids = (s.state_changes || []).filter((c) => c.download_id).map((c) => c.download_id);
+    if (new Set(ids).size !== ids.length) errs.push(`${where}: duplicate download_id in one block`);
     for (const c of s.state_changes || []) {
       if (c.type === 'tab_opened' && !s.tabs?.some((t) => t.tab_id === c.tab_id)) errs.push(`${where}: tab_opened not in tabs`);
+      const fields = { tab_opened: ['type', 'tab_id'], download_started: ['type', 'download_id', 'url'], download_completed: ['type', 'download_id', 'url', 'path', 'size_bytes'], download_failed: ['type', 'download_id', 'url', 'error'] }[c.type];
+      if (!fields) errs.push(`${where}: unknown state change ${c.type}`);
+      else if (Object.keys(c).some((k) => !fields.includes(k))) errs.push(`${where}: extra fields in ${c.type}`);
+      if ('size_bytes' in c && !(Number.isInteger(c.size_bytes) && c.size_bytes >= 0)) errs.push(`${where}: bad size_bytes`);
     }
   }
 }
 
 function validate(body, imageSizes) {
   const errs = [];
-  if (JSON.stringify(body.tools) !== JSON.stringify([{ type: 'browser_toolset_20260801' }])) errs.push('tools entry changed');
+  const OPTIONAL = ['javascript_exec', 'file_upload', 'read_console', 'read_network'];
+  const entry = body.tools?.[0];
+  if (body.tools?.length !== 1 || entry.type !== 'browser_toolset_20260801' || Object.keys(entry).some((k) => !['type', 'configs'].includes(k))) errs.push('bad tools entry');
+  for (const [k, v] of Object.entries(entry?.configs || {})) {
+    if (!OPTIONAL.includes(k) || JSON.stringify(v) !== '{"enabled":true}') errs.push(`bad config ${k}`);
+  }
   const msgs = body.messages;
   for (let i = 0; i < msgs.length; i++) {
     const m = msgs[i];

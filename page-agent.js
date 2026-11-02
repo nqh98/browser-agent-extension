@@ -15,6 +15,7 @@
     TABLE: 'table', TR: 'row', TD: 'cell', TH: 'columnheader', UL: 'list', OL: 'list',
     LI: 'listitem', SUMMARY: 'button', DIALOG: 'dialog', ASIDE: 'complementary', LABEL: 'label',
     VIDEO: 'video', AUDIO: 'audio', CANVAS: 'canvas', ARTICLE: 'article', SECTION: 'region',
+    IFRAME: 'iframe', FRAME: 'iframe',
   };
   const INPUT_ROLES = {
     button: 'button', submit: 'button', reset: 'button', image: 'button', checkbox: 'checkbox',
@@ -30,7 +31,73 @@
   ]);
   const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'META', 'LINK', 'HEAD']);
 
-  const clean = (s, max = 120) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, max);
+  // Page text must not be able to forge "[ref_N]" tags or frame placeholders in our output.
+  const clean = (s, max = 120) => String(s || '').replace(/[\u0000-\u0008\u000e-\u001f]/g, '')
+    .replace(/\s+/g, ' ').trim().replace(/\[(?=ref_)/gi, '(').slice(0, max);
+  const FRAME_MARK = '\u0001frame:';
+  const isFrame = (el) => el?.tagName === 'IFRAME' || el?.tagName === 'FRAME';
+
+  // ---- Frames ----
+  // Chrome gives content scripts no way to map an <iframe> element to its frameId, so the
+  // executor matches them with a handshake: each frame posts a random token to every child
+  // frame window, and each child reports the token it received from its parent.
+  let probeFromParent = null;
+  addEventListener('message', (event) => {
+    const token = event.data?.__browserAgentProbe;
+    if (typeof token === 'string' && event.source === window.parent && window.parent !== window) {
+      probeFromParent = token;
+    }
+  });
+
+  function frameList() {
+    const out = [];
+    const visit = (root) => {
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot) visit(el.shadowRoot);
+        if (isFrame(el)) out.push(el);
+      }
+    };
+    visit(document);
+    return out;
+  }
+
+  function probeFrames() {
+    const token = crypto.randomUUID();
+    frameList().forEach((frame, index) => {
+      try { frame.contentWindow?.postMessage({ __browserAgentProbe: `${token}:${index}` }, '*'); } catch {}
+    });
+    return { token };
+  }
+
+  function whoAmI() {
+    return { probe: probeFromParent, url: location.href, width: innerWidth, height: innerHeight };
+  }
+
+  /** Top-left of a child frame's content box in this frame's viewport. */
+  function frameBox(index) {
+    const frame = frameList()[index];
+    if (!frame) throw new Error('The frame is no longer on the page. Re-read the page.');
+    const r = frame.getBoundingClientRect();
+    const style = getComputedStyle(frame);
+    return {
+      x: r.left + frame.clientLeft + parseFloat(style.paddingLeft || 0),
+      y: r.top + frame.clientTop + parseFloat(style.paddingTop || 0),
+    };
+  }
+
+  /** Converts a point inside child frame `index` to this frame's viewport, scrolling it into view. */
+  function framePoint(index, x, y) {
+    let box = frameBox(index);
+    let px = box.x + x;
+    let py = box.y + y;
+    if (px < 0 || py < 0 || px > innerWidth || py > innerHeight) {
+      scrollBy({ left: px - innerWidth / 2, top: py - innerHeight / 2, behavior: 'instant' });
+      box = frameBox(index);
+      px = box.x + x;
+      py = box.y + y;
+    }
+    return { x: px, y: py };
+  }
   const quote = (s) => JSON.stringify(s);
 
   function refFor(el) {
@@ -159,6 +226,7 @@
 
   function readPage({ filter, depth = 15, ref } = {}) {
     const root = ref ? getEl(ref) : document.body;
+    const frameIndex = new Map(frameList().map((frame, index) => [frame, index]));
     const maxDepth = Math.max(1, Number(depth) || 15);
     const lines = [];
     let chars = 0;
@@ -181,11 +249,15 @@
           : Boolean(role || ownText(el) || isInteractive(el, role));
         // Unnamed structure adds noise without giving Claude anything to act on.
         if (include && filter !== 'interactive' && ['list', 'row', 'region'].includes(role) && !nameOf(el, role)) include = false;
+        // Frames are always listed so their content can be nested under them.
+        if (isFrame(el)) include = true;
       }
       let next = level;
       if (include) {
         const line = describeLine(el, level);
         if (line) { add(line); next = level + 1; }
+        // The executor replaces this marker with the child frame's own tree.
+        if (line && isFrame(el) && frameIndex.has(el) && next < maxDepth) add(`${FRAME_MARK}${frameIndex.get(el)}:${next}`);
       }
       if (next >= maxDepth) return;
       if (el.shadowRoot) for (const child of el.shadowRoot.children) walk(child, next);
@@ -200,7 +272,7 @@
 
   const fold = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').toLowerCase();
 
-  function find({ query }) {
+  function find({ query, raw }) {
     const tokens = fold(query).split(/\s+/).filter(Boolean);
     const matches = [];
     const visit = (root) => {
@@ -216,6 +288,7 @@
     };
     visit(document);
     matches.sort((a, b) => b.score - a.score);
+    if (raw) return matches.slice(0, 20).map((m) => ({ score: m.score, line: describeLine(m.el, 0) })).filter((m) => m.line);
     const lines = matches.slice(0, 20).map((m) => describeLine(m.el, 0)).filter(Boolean);
     return lines.join('\n') || `No elements matched "${query}". Try read_page or a screenshot.`;
   }
@@ -249,11 +322,25 @@
   }
 
   function describeRef(ref) { return labelFor(getEl(ref)); }
-  function describePoint(x, y) { return labelFor(document.elementFromPoint(x, y)); }
+  function describePoint(x, y) {
+    let el = document.elementFromPoint(x, y);
+    while (el?.shadowRoot) {
+      const inner = el.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === el) break;
+      el = inner;
+    }
+    if (isFrame(el)) {
+      const index = frameList().indexOf(el);
+      const box = frameBox(index);
+      return { frame: index, x: x - box.x, y: y - box.y, ...labelFor(el) };
+    }
+    return labelFor(el);
+  }
 
   function describeFocus() {
     let el = document.activeElement;
     while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+    if (isFrame(el)) return { frame: frameList().indexOf(el), ...labelFor(el) };
     const info = labelFor(el);
     const form = el?.form || el?.closest?.('form');
     const submit = form?.querySelector('[type="submit"], button:not([type])');
@@ -290,6 +377,24 @@
     return `Set value of ${ref}.`;
   }
 
+  function setFiles(ref, files) {
+    const el = getEl(ref);
+    if (el.tagName !== 'INPUT' || el.type !== 'file') throw new Error(`${ref} is not a file input.`);
+    if (el.disabled) throw new Error(`${ref} is disabled.`);
+    if (files.length > 1 && !el.multiple) throw new Error(`${ref} accepts only one file.`);
+    const transfer = new DataTransfer();
+    for (const file of files) {
+      const binary = atob(file.data);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      transfer.items.add(new File([bytes], file.name, { type: file.type || 'application/octet-stream', lastModified: file.lastModified }));
+    }
+    el.files = transfer.files;
+    el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    return `Set ${files.length} file(s) on ${ref}: ${files.map((f) => f.name).join(', ')}.`;
+  }
+
   function scrollTo(ref) {
     getEl(ref).scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
     return `Scrolled ${ref} into view.`;
@@ -297,5 +402,6 @@
 
   globalThis.__browserAgent = {
     readPage, find, getPageText, locate, describeRef, describePoint, describeFocus, formInput, scrollTo,
+    setFiles, probeFrames, whoAmI, frameBox, framePoint,
   };
 })();
