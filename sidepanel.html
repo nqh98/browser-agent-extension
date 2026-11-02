@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Browser Agent</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header>
+    <strong>Browser Agent</strong>
+    <span id="usage" class="muted"></span>
+    <span class="spacer"></span>
+    <button id="newChat" class="ghost" title="Cuộc trò chuyện mới">Mới</button>
+    <button id="toggleSettings" class="ghost" title="Cài đặt">Cài đặt</button>
+  </header>
+
+  <form id="settings" hidden>
+    <label>API key
+      <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-...">
+    </label>
+    <label>Model
+      <input id="model" list="models" spellcheck="false">
+      <datalist id="models">
+        <option value="claude-sonnet-5-5"></option>
+        <option value="claude-opus-5-5"></option>
+        <option value="claude-haiku-5-5"></option>
+        <option value="claude-fable-5-1"></option>
+      </datalist>
+    </label>
+    <label>Quyền thao tác
+      <select id="mode">
+        <option value="ask">Hỏi trước mỗi thao tác thay đổi trang</option>
+        <option value="auto">Tự động, chỉ hỏi thao tác nhạy cảm</option>
+      </select>
+    </label>
+    <label>Trang luôn được phép (mỗi dòng một tên miền)
+      <textarea id="hosts" rows="3" spellcheck="false" placeholder="example.com"></textarea>
+    </label>
+    <p class="muted">API key được lưu không mã hóa trong hồ sơ Chrome này. Đừng dùng trên máy dùng chung.</p>
+    <button type="submit">Lưu</button>
+  </form>
+
+  <main id="log" aria-live="polite">
+    <p class="muted hint">Giao việc cho tác tử trên tab đang mở, ví dụ: "Tóm tắt trang này" hoặc "Tìm chuyến bay rẻ nhất tới Đà Nẵng".</p>
+  </main>
+
+  <form id="composer">
+    <textarea id="prompt" rows="2" placeholder="Bạn muốn làm gì trên trang này?"></textarea>
+    <button id="send" type="submit">Gửi</button>
+    <button id="stop" type="button" class="danger" hidden>Dừng</button>
+  </form>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>
