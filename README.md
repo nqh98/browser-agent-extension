@@ -10,6 +10,13 @@ Extension Chrome không chính thức. Tác tử chạy trong side panel, đọc
 4. Bấm biểu tượng extension để mở side panel.
 5. Nhập API key, chọn model và bấm **Lưu**.
 
+## Dùng qua gateway của công ty
+
+- **API base URL**: địa chỉ gateway, ví dụ `https://llm-gateway.congty.vn/anthropic`. Có hay không có `/v1` ở cuối đều được. Để trống thì dùng `https://api.anthropic.com`.
+- **Kiểu xác thực**: `x-api-key` cho Anthropic, hoặc `Authorization: Bearer` nếu gateway yêu cầu.
+- **Model**: bấm **Tải** để lấy danh sách model mà key hoặc gateway cho phép, qua `GET /v1/models` (định dạng Anthropic có phân trang, hoặc dạng `{ data: [{ id }] }`). Danh sách cũng tự tải lại sau khi bạn lưu base URL, kiểu xác thực hoặc key mới, và được lưu lại cho lần mở sau. Chọn **Nhập tên khác…** để gõ tên model không có trong danh sách. Nếu gateway không có `/v1/models`, bạn nhập tên model thủ công.
+- Gateway phải hỗ trợ Messages API (`/v1/messages`) và chuyển tiếp nguyên tool `browser_toolset_20260801` cùng các trường `toolset_name` và `browser_state`.
+
 Chrome sẽ hiện thanh thông báo "đang gỡ lỗi trình duyệt" khi tác tử điều khiển tab. Nếu bạn tắt thanh này, tác vụ sẽ dừng.
 
 ## Quyền và an toàn

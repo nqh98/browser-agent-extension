@@ -1,8 +1,8 @@
-import { runTask } from './agent.js';
+import { runTask, listModels, apiBase } from './agent.js';
 import { BrowserExecutor } from './browser.js';
 
 const $ = (id) => document.getElementById(id);
-const DEFAULTS = { apiKey: '', model: 'claude-sonnet-5-5', mode: 'ask', approvedHosts: [], tools: {} };
+const DEFAULTS = { baseUrl: '', authType: 'x-api-key', apiKey: '', model: 'claude-sonnet-5-5', mode: 'ask', approvedHosts: [], tools: {} };
 const MAX_ATTACH_BYTES = 25 * 1024 * 1024;
 
 let settings = { ...DEFAULTS };
@@ -13,6 +13,79 @@ const totals = { input: 0, output: 0 };
 const pendingConfirms = new Set();
 const attachments = new Map(); // document_id -> File
 let nextDocument = 0;
+const CUSTOM_MODEL = '__custom__';
+let modelLoad = null;
+
+/** The model chosen in the form: the gateway list when shown, otherwise the text box. */
+function chosenModel() {
+  const select = $('modelSelect');
+  if (!select.hidden && select.value !== CUSTOM_MODEL) return select.value;
+  return $('model').value.trim();
+}
+
+/** Shows the allowed models as a dropdown, keeping a way to type any other name. */
+function renderModels(models, current) {
+  const select = $('modelSelect');
+  select.replaceChildren();
+  if (!models?.length) {
+    select.hidden = true;
+    $('model').hidden = false;
+    $('model').value = current;
+    return;
+  }
+  const add = (value, label) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    select.append(option);
+  };
+  for (const model of models) add(model.id, model.name && model.name !== model.id ? `${model.name} (${model.id})` : model.id);
+  const known = models.some((model) => model.id === current);
+  add(CUSTOM_MODEL, 'Nhập tên khác…');
+  select.value = known ? current : current ? CUSTOM_MODEL : models[0].id;
+  select.hidden = false;
+  $('model').value = known ? '' : current;
+  $('model').hidden = select.value !== CUSTOM_MODEL;
+}
+
+function formConnection() {
+  return { baseUrl: $('baseUrl').value.trim(), authType: $('authType').value, apiKey: $('apiKey').value.trim() };
+}
+
+/** Fetches the models the key or gateway allows and caches them per base URL. */
+async function refreshModels() {
+  const connection = formConnection();
+  if (!connection.apiKey) {
+    $('modelStatus').textContent = 'Nhập API key để tải danh sách model.';
+    return;
+  }
+  modelLoad?.abort();
+  const load = new AbortController();
+  modelLoad = load;
+  const current = chosenModel();
+  $('refreshModels').disabled = true;
+  $('modelStatus').textContent = 'Đang tải danh sách model…';
+  try {
+    const models = await listModels(connection, load.signal);
+    if (load.signal.aborted) return;
+    renderModels(models, current);
+    $('modelStatus').textContent = models.length
+      ? `${models.length} model được phép tại ${apiBase(connection.baseUrl)}.`
+      : 'Gateway không trả về model nào. Hãy nhập tên model thủ công.';
+    if (models.length && current && !models.some((model) => model.id === current)) {
+      $('modelStatus').textContent += ` "${current}" không có trong danh sách.`;
+    }
+    await chrome.storage.local.set({ modelCache: { base: apiBase(connection.baseUrl), models } });
+  } catch (error) {
+    if (load.signal.aborted) return;
+    $('modelStatus').textContent = `Không tải được danh sách model: ${error.message || error}`;
+  } finally {
+    if (modelLoad === load) {
+      modelLoad = null;
+      $('refreshModels').disabled = false;
+    }
+  }
+}
 
 function append(className, text) {
   $('log').querySelector('.hint')?.remove();
@@ -209,8 +282,9 @@ $('newChat').addEventListener('click', () => {
 });
 $('settings').addEventListener('submit', async (event) => {
   event.preventDefault();
-  settings.apiKey = $('apiKey').value.trim();
-  settings.model = $('model').value.trim() || DEFAULTS.model;
+  const before = `${apiBase(settings.baseUrl)}|${settings.authType}|${settings.apiKey}`;
+  Object.assign(settings, formConnection());
+  settings.model = chosenModel() || DEFAULTS.model;
   settings.mode = $('mode').value;
   settings.approvedHosts = $('hosts').value.split('\n').map((line) => line.trim()).filter(Boolean);
   settings.tools = Object.fromEntries([...document.querySelectorAll('[data-tool]')].map((box) => [box.dataset.tool, box.checked]));
@@ -222,13 +296,23 @@ $('settings').addEventListener('submit', async (event) => {
     executor = null;
   }
   $('settings').hidden = true;
+  if (settings.apiKey && before !== `${apiBase(settings.baseUrl)}|${settings.authType}|${settings.apiKey}`) refreshModels();
+});
+$('refreshModels').addEventListener('click', refreshModels);
+$('modelSelect').addEventListener('change', () => {
+  const custom = $('modelSelect').value === CUSTOM_MODEL;
+  $('model').hidden = !custom;
+  if (custom) $('model').focus();
 });
 
 (async () => {
   const stored = await chrome.storage.local.get('settings');
   settings = { ...DEFAULTS, ...stored.settings };
+  $('baseUrl').value = settings.baseUrl;
+  $('authType').value = settings.authType;
   $('apiKey').value = settings.apiKey;
-  $('model').value = settings.model;
+  const { modelCache } = await chrome.storage.local.get('modelCache');
+  renderModels(modelCache?.base === apiBase(settings.baseUrl) ? modelCache.models : [], settings.model);
   $('mode').value = settings.mode;
   $('hosts').value = settings.approvedHosts.join('\n');
   settings.tools = { ...settings.tools };
