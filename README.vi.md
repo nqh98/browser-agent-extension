@@ -6,11 +6,28 @@ Extension Chrome không chính thức. Tác tử chạy trong side panel, đọc
 
 ## Cài đặt
 
-1. Giải nén thư mục này.
-2. Mở `chrome://extensions` và bật **Developer mode**.
-3. Chọn **Load unpacked**, rồi chọn thư mục đã giải nén. ID của extension luôn là `eboigejnblbcifgbpgaadonkpgbdbnkc`; nếu trước đó bạn đã nạp bản cũ (ID khác), hãy gỡ bản cũ đi và nhập lại cài đặt.
-4. Bấm biểu tượng extension để mở side panel.
-5. Chọn cách dùng:
+Extension không có trên Chrome Web Store; bạn cài trực tiếp từ repo này.
+
+### Cài nhanh
+
+1. Lấy mã nguồn: `git clone https://github.com/nqh98/browser-agent-extension.git`, hoặc trên GitHub bấm **Code → Download ZIP** rồi giải nén. Để thư mục ở chỗ cố định, vì Chrome nạp extension từ chính thư mục đó.
+2. Chạy bộ cài trong thư mục đó:
+   - **Windows**: bấm đúp `install.cmd`.
+   - **macOS / Linux**: `./install.sh`
+3. Bộ cài cài hoặc cập nhật plugin Claude Code từ thư mục (nếu máy có Claude Code), mở `chrome://extensions`, chép sẵn đường dẫn thư mục vào clipboard, và chỉ ra ba cú bấm còn lại: bật **Developer mode** → **Load unpacked** → dán đường dẫn.
+
+Chrome chỉ nhận extension từ thư mục qua trang đó, nên không script hay file `.exe` nào bấm thay bạn ba bước này được. Chỉ cần làm một lần; sau đó cập nhật bằng `git pull` (hoặc tải ZIP mới), chạy lại bộ cài, rồi bấm ↻ ở Browser Agent.
+
+### Cài thủ công
+
+1. Lấy mã nguồn: trên GitHub bấm **Code → Download ZIP** rồi giải nén, hoặc chạy `git clone https://github.com/nqh98/browser-agent-extension.git`. Để thư mục ở chỗ cố định, vì Chrome nạp extension từ chính thư mục đó.
+2. Mở `chrome://extensions` và bật **Developer mode** (góc trên bên phải). Chrome bắt buộc bật để cài extension từ thư mục.
+3. Chọn **Load unpacked**, rồi chọn thư mục (thư mục có `manifest.json`). ID của extension luôn là `eboigejnblbcifgbpgaadonkpgbdbnkc`; nếu trước đó bạn đã nạp bản cũ (ID khác), hãy gỡ bản cũ đi và nhập lại cài đặt.
+4. Tùy chọn: ghim extension bằng biểu tượng mảnh ghép trên thanh công cụ.
+
+Cập nhật: `git pull` (hoặc tải lại ZIP vào cùng thư mục), rồi bấm ↻ ở Browser Agent trong `chrome://extensions` và mở lại side panel. Edge (`edge://extensions`) và các trình duyệt Chromium khác làm tương tự.
+
+Sau đó bấm biểu tượng extension để mở side panel và chọn cách dùng:
    - **Chat trong panel**: giao việc ngay trong panel. Nhập API key, bấm **Kiểm tra** để xác nhận key và chọn model, rồi **Lưu**.
    - **Điều khiển từ Claude Code**: Claude Code trong terminal thao tác trình duyệt, không cần API key (xem mục bên dưới).
 
@@ -125,6 +142,12 @@ Tệp tải xuống trong lúc tác vụ chạy được báo cho Claude (`downl
 - `keys.js`: chuyển đổi phím sang Chrome DevTools Protocol.
 - `bridge-client.js`: kết nối side panel với MCP server của Claude Code.
 - `claude-code/`: plugin Claude Code, gồm MCP server không phụ thuộc thư viện ngoài (`server/`) và skill hướng dẫn dùng tool.
+- `icons/`: icon của extension, vẽ bằng `scripts/make_icons.py`.
+- `install.sh`, `install.cmd` (+ `install.ps1`): bộ cài một bước.
+
+## Giấy phép
+
+[Apache License 2.0](LICENSE). Không chính thức; không liên kết với Anthropic.
 
 ## Kiểm thử
 

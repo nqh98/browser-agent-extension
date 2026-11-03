@@ -6,11 +6,28 @@ An unofficial Chrome extension. An agent in the side panel reads and operates we
 
 ## Install
 
-1. Unzip this folder.
-2. Open `chrome://extensions` and turn on **Developer mode**.
-3. Click **Load unpacked** and pick the folder. The extension ID is always `eboigejnblbcifgbpgaadonkpgbdbnkc`; if you loaded an older copy before (with a different ID), remove it and enter your settings again.
-4. Click the extension icon to open the side panel.
-5. Choose how to use it:
+The extension is not on the Chrome Web Store; you install it from this repository.
+
+### Quick install
+
+1. Get the code: `git clone https://github.com/nqh98/browser-agent-extension.git`, or on GitHub **Code → Download ZIP** and unzip. Keep the folder somewhere permanent: Chrome loads the extension from it.
+2. Run the installer in that folder:
+   - **Windows**: double-click `install.cmd`.
+   - **macOS / Linux**: `./install.sh`
+3. It installs or updates the Claude Code plugin from the folder (if Claude Code is installed), opens `chrome://extensions`, copies the folder path to the clipboard, and tells you the three clicks left: turn on **Developer mode** → **Load unpacked** → paste the path.
+
+Chrome only accepts extensions from a folder through that page, so no script or `.exe` can do those three clicks for you. They are needed once; after that, updating is `git pull` (or a fresh ZIP), running the installer again, and clicking ↻ on Browser Agent.
+
+### Manual install
+
+1. Get the code: on GitHub click **Code → Download ZIP** and unzip it, or run `git clone https://github.com/nqh98/browser-agent-extension.git`. Keep the folder somewhere permanent: Chrome loads the extension from it.
+2. Open `chrome://extensions` and turn on **Developer mode** (top right). Chrome requires it for extensions installed from a folder.
+3. Click **Load unpacked** and pick the folder (the one with `manifest.json`). The extension ID is always `eboigejnblbcifgbpgaadonkpgbdbnkc`; if you loaded an older copy before (with a different ID), remove it and enter your settings again.
+4. Optional: pin it with the puzzle icon in the toolbar.
+
+To update: `git pull` (or download the ZIP again into the same folder), then click ↻ on Browser Agent in `chrome://extensions` and reopen the side panel. Works the same in Edge (`edge://extensions`) and other Chromium browsers.
+
+Then click the extension icon to open the side panel and choose how to use it:
    - **Chat in the panel**: give tasks right in the panel. Enter an API key, click **Check** to verify it and pick a model, then **Save**.
    - **Control from Claude Code**: Claude Code in your terminal operates the browser; no API key needed (see below).
 
@@ -125,6 +142,12 @@ Downloads that start during a task are reported to Claude (`download_started`, `
 - `keys.js`: converts keys for the Chrome DevTools Protocol.
 - `bridge-client.js`: connects the side panel to Claude Code's MCP server.
 - `claude-code/`: the Claude Code plugin, with a dependency-free MCP server (`server/`) and a skill on using the tools.
+- `icons/`: the extension icons, drawn by `scripts/make_icons.py`.
+- `install.sh`, `install.cmd` (+ `install.ps1`): the one-step installers.
+
+## License
+
+[Apache License 2.0](LICENSE). Unofficial; not affiliated with Anthropic.
 
 ## Tests
 

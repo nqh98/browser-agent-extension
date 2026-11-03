@@ -4,6 +4,8 @@
   "author": {
     "name": "huynq"
   },
+  "license": "Apache-2.0",
+  "repository": "https://github.com/nqh98/browser-agent-extension",
   "description": "Lets Claude Code drive your Chrome through the Browser Agent extension (side panel), with per-site approval and confirmation prompts in the panel.",
   "keywords": [
     "browser",
