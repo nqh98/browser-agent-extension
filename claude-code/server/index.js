@@ -29,7 +29,13 @@ const client = { protocol: '', elicitation: false };
 const CALL_TIMEOUT = 10 * 60 * 1000; // a call may wait for the user to approve it in the panel
 // Fixed by the "key" in manifest.json. Browsers set Origin themselves, so web pages and
 // other extensions cannot pass this check. Override only for a repackaged extension.
-const EXTENSION_ID = process.env.BROWSER_AGENT_EXTENSION_ID || 'eboigejnblbcifgbpgaadonkpgbdbnkc';
+// Fixed by the "key" in manifest.json, wherever the folder is loaded from. For a copy
+// repackaged with another key, BROWSER_AGENT_EXTENSION_ID adds ids (comma-separated).
+const EXTENSION_ID = 'eboigejnblbcifgbpgaadonkpgbdbnkc';
+const EXTENSION_ORIGINS = new Set([
+  EXTENSION_ID,
+  ...String(process.env.BROWSER_AGENT_EXTENSION_ID || '').split(',').map((id) => id.trim()).filter((id) => /^[a-p]{32}$/.test(id)),
+].map((id) => `chrome-extension://${id}`));
 // Optional, for machines shared with other OS users: their processes can forge Origin.
 const TOKEN = process.env.BROWSER_AGENT_TOKEN || '';
 
@@ -66,7 +72,7 @@ const http = createServer((_request, response) => {
 });
 http.on('upgrade', (request, socket) => {
   const allowed = (req) => new URL(req.url, 'http://x').pathname === '/bridge'
-    && req.headers.origin === `chrome-extension://${EXTENSION_ID}`;
+    && EXTENSION_ORIGINS.has(req.headers.origin);
   const ws = upgrade(request, socket, allowed);
   if (!ws) return;
   const helloTimer = setTimeout(() => ws.close(4001, 'No hello'), 5000);
