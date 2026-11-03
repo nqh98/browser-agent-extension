@@ -6,7 +6,7 @@ Extension Chrome không chính thức. Tác tử chạy trong side panel, đọc
 
 1. Giải nén thư mục này.
 2. Mở `chrome://extensions` và bật **Developer mode**.
-3. Chọn **Load unpacked**, rồi chọn thư mục đã giải nén.
+3. Chọn **Load unpacked**, rồi chọn thư mục đã giải nén. ID của extension luôn là `eboigejnblbcifgbpgaadonkpgbdbnkc`; nếu trước đó bạn đã nạp bản cũ (ID khác), hãy gỡ bản cũ đi và nhập lại cài đặt.
 4. Bấm biểu tượng extension để mở side panel.
 5. Nhập API key, chọn model và bấm **Lưu**.
 
@@ -18,6 +18,43 @@ Extension Chrome không chính thức. Tác tử chạy trong side panel, đọc
 - Gateway phải hỗ trợ Messages API (`/v1/messages`) và chuyển tiếp nguyên tool `browser_toolset_20260801` cùng các trường `toolset_name` và `browser_state`.
 
 Chrome sẽ hiện thanh thông báo "đang gỡ lỗi trình duyệt" khi tác tử điều khiển tab. Nếu bạn tắt thanh này, tác vụ sẽ dừng.
+
+## Điều khiển từ Claude Code (terminal)
+
+Claude Code trong terminal có thể điều khiển Chrome qua extension này, giống Claude in Chrome. Ở chế độ này Claude Code là bên gọi model, nên extension không cần API key; gateway công ty (nếu có) cấu hình phía Claude Code.
+
+```
+Claude Code (terminal 1) ──stdio──▶ MCP server :18765 ──┐
+Claude Code (terminal 2) ──stdio──▶ MCP server :18766 ──┼─WebSocket 127.0.0.1──▶ side panel ──▶ tab Chrome
+                                                   …     ┘
+```
+
+1. Cài plugin (cần Node.js 18 trở lên):
+
+   ```
+   /plugin marketplace add /đường/dẫn/tới/browser-agent-extension
+   /plugin install browser-agent@browser-agent-extension
+   ```
+
+   Hoặc không dùng plugin: `claude mcp add browser-agent -- node /đường/dẫn/tới/browser-agent-extension/claude-code/server/index.js`.
+2. Khởi động lại Claude Code.
+3. Trong side panel, mở **Cài đặt → Claude Code**, tick **Cho phép Claude Code…** rồi bấm **Lưu**. Header của panel hiện nhãn **Claude Code** khi đã kết nối (**Claude Code ×2** khi có hai phiên).
+4. Giữ side panel mở, rồi bảo Claude Code làm việc trên trình duyệt, ví dụ "mở example.com và tóm tắt trang". Claude Code có thể gọi tool `bridge_status` để kiểm tra kết nối.
+
+Cách hoạt động:
+
+- Các tool `mcp__browser-agent__*` (`navigate`, `read_page`, `find`, `left_click`, `form_input`, `screenshot`…) ứng với các member tool của extension và có cùng tham số.
+- Quyền theo tên miền, chế độ hỏi trước, phát hiện thao tác nhạy cảm và tool tùy chọn vẫn áp dụng như khi chạy trong panel. Hộp xác nhận hiện trong panel, Claude Code chờ tới khi bạn trả lời (tối đa 10 phút).
+- Mỗi thao tác được ghi trong panel với nhãn "Claude Code". Trong lúc Claude Code điều khiển, ô chat của panel bị khóa. Nút **Dừng** cắt thao tác đang chạy, và lần gọi kế tiếp báo cho Claude Code rằng bạn đã dừng.
+- Sau 3 phút Claude Code không gọi tool, extension thả quyền điều khiển tab và thanh "đang gỡ lỗi" biến mất.
+- An toàn: server chỉ nghe trên `127.0.0.1` và chỉ nhận kết nối có origin đúng ID của extension này (`chrome-extension://eboigejnblbcifgbpgaadonkpgbdbnkc`, cố định nhờ `key` trong `manifest.json`). Trình duyệt tự đặt origin nên trang web và extension khác không giả được. Trên máy có nhiều người dùng hệ điều hành, đặt thêm biến `BROWSER_AGENT_TOKEN` cho Claude Code và nhập cùng giá trị vào ô Token trong panel. Nếu đóng gói lại extension với key khác, đặt `BROWSER_AGENT_EXTENSION_ID` cho server.
+
+Nhiều terminal cùng lúc:
+
+- Mỗi phiên Claude Code tự lấy cổng trống đầu tiên trong `18765`–`18774`, panel kết nối tới cả 10 cổng. Tối đa 10 phiên song song. Đổi khoảng cổng bằng biến `BROWSER_AGENT_PORT` (cổng đầu) và ô **Cổng đầu** trong panel.
+- Mỗi phiên được gắn nhãn theo tên thư mục nơi chạy Claude Code (đổi bằng `BROWSER_AGENT_LABEL`). Nhãn hiện trong trạng thái kết nối, trong nhật ký thao tác và trong hộp xác nhận, ví dụ `[my-project] Cho phép tác tử dùng example.com?`.
+- Mỗi phiên có tab, quyền tên miền và trạng thái riêng. Tab đang mở thuộc về phiên đầu tiên dùng nó; phiên khác gọi `new_tab` sẽ được mở trong cửa sổ riêng, để các phiên không phải tranh nhau tab đang hiển thị khi chụp màn hình.
+- Nút **Dừng** dừng mọi phiên đang chạy. Đóng một terminal chỉ ngắt phiên của terminal đó.
 
 ## Quyền và an toàn
 
@@ -58,6 +95,8 @@ Tệp tải xuống trong lúc tác vụ chạy được báo cho Claude (`downl
 - `page-agent.js`: đọc trang và quản lý tham chiếu cục bộ trong isolated world của từng frame.
 - `capture.js`: ghi nhận console và request mạng, che thông tin nhạy cảm.
 - `keys.js`: chuyển đổi phím sang Chrome DevTools Protocol.
+- `bridge-client.js`: kết nối side panel với MCP server của Claude Code.
+- `claude-code/`: plugin Claude Code, gồm MCP server không phụ thuộc thư viện ngoài (`server/`) và skill hướng dẫn dùng tool.
 
 ## Kiểm thử
 
@@ -66,4 +105,5 @@ Tệp tải xuống trong lúc tác vụ chạy được báo cho Claude (`downl
 ```sh
 npm i -D playwright   # nếu chưa có
 node tests/e2e/run.js
+node tests/e2e/bridge.js   # Claude Code → MCP server → extension
 ```

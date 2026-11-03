@@ -1,0 +1,7 @@
+{
+  "name": "browser-agent",
+  "version": "0.1.0",
+  "author": { "name": "huynq" },
+  "description": "Lets Claude Code drive your Chrome through the Browser Agent extension (side panel), with per-site approval and confirmation prompts in the panel.",
+  "keywords": ["browser", "chrome", "automation", "mcp"]
+}

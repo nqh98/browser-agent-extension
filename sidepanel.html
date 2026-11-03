@@ -10,6 +10,7 @@
   <header>
     <strong>Browser Agent</strong>
     <span id="usage" class="muted"></span>
+    <span id="bridgeBadge" class="badge" hidden></span>
     <span class="spacer"></span>
     <button id="newChat" class="ghost" title="Cuộc trò chuyện mới">Mới</button>
     <button id="toggleSettings" class="ghost" title="Cài đặt">Cài đặt</button>
@@ -59,6 +60,18 @@
       <label class="check"><input type="checkbox" data-tool="file_upload"> Tải lên tệp bạn đính kèm</label>
       <label class="check"><input type="checkbox" data-tool="javascript_exec"> Chạy JavaScript trên trang</label>
       <p class="muted">JavaScript chạy với toàn quyền của trang, gồm cookie và tài khoản đang đăng nhập. Chỉ bật khi dùng hồ sơ Chrome không đăng nhập tài khoản quan trọng. Tác tử chỉ tải lên được tệp bạn đính kèm bằng nút 📎.</p>
+    </fieldset>
+    <fieldset>
+      <legend>Claude Code</legend>
+      <label class="check"><input id="bridgeEnabled" type="checkbox"> Cho phép Claude Code trong terminal điều khiển trình duyệt qua panel này</label>
+      <label>Cổng đầu (mỗi phiên Claude Code dùng một cổng trong 10 cổng từ đây)
+        <input id="bridgePort" type="number" min="1024" max="65526" placeholder="18765">
+      </label>
+      <label>Token (không bắt buộc)
+        <input id="bridgeToken" type="password" autocomplete="off" spellcheck="false" placeholder="chỉ khi Claude Code đặt BROWSER_AGENT_TOKEN">
+      </label>
+      <span id="bridgeStatus" class="muted"></span>
+      <p class="muted">Cần cài plugin browser-agent cho Claude Code và giữ side panel này mở. Quyền theo tên miền, chế độ hỏi trước và tool tùy chọn ở trên vẫn áp dụng; hộp xác nhận hiện trong panel này. Không cần API key cho chế độ này.</p>
     </fieldset>
     <p class="muted">API key được lưu không mã hóa trong hồ sơ Chrome này. Đừng dùng trên máy dùng chung.</p>
     <button type="submit">Lưu</button>

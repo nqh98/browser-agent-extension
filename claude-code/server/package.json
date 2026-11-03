@@ -1,0 +1,5 @@
+{
+  "name": "browser-agent-mcp",
+  "private": true,
+  "type": "module"
+}

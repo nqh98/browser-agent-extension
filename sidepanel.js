@@ -1,8 +1,10 @@
 import { runTask, listModels, apiBase } from './agent.js';
 import { BrowserExecutor } from './browser.js';
+import { BridgeClient } from './bridge-client.js';
 
 const $ = (id) => document.getElementById(id);
-const DEFAULTS = { baseUrl: '', authType: 'x-api-key', apiKey: '', model: 'claude-sonnet-5-5', mode: 'ask', approvedHosts: [], tools: {} };
+const DEFAULTS = { baseUrl: '', authType: 'x-api-key', apiKey: '', model: 'claude-sonnet-5-5', mode: 'ask', approvedHosts: [], tools: {}, bridge: { enabled: false, port: 18765, token: '' } };
+const REMOTE_IDLE_MS = 3 * 60 * 1000;
 const MAX_ATTACH_BYTES = 25 * 1024 * 1024;
 
 let settings = { ...DEFAULTS };
@@ -181,9 +183,170 @@ function setRunning(running) {
   if (!running) $('prompt').focus();
 }
 
-function stopTask() {
+function stopTask({ byUser = true } = {}) {
   controller?.abort();
+  for (const session of sessions.values()) {
+    if (!session.controller) continue;
+    session.controller.abort();
+    session.stopped = byUser;
+    endSession(session);
+  }
   for (const entry of [...pendingConfirms]) entry.cancel();
+}
+
+function ensureExecutor() {
+  executor ??= new BrowserExecutor({
+    confirm: askUser,
+    settings,
+    persistHost,
+    onDetachedByUser: () => {
+      append('error', 'Bạn đã tắt quyền điều khiển tab, tác vụ đã dừng.');
+      stopTask();
+    },
+  });
+  executor.settings = settings;
+  executor.documents = attachments;
+  return executor;
+}
+
+// ---- Claude Code bridge: each terminal session drives its own executor through ----
+// ---- its own local MCP server, one port per session in a small range.           ----
+
+const BRIDGE_PORTS = 10;
+const sessions = new Map(); // port -> { port, client, state, detail, label, executor, controller, idle, stopped }
+const remoteError = (text) => ({ type: 'tool_result', toolset_name: 'browser', is_error: true, content: `Error: ${text}` });
+const remoteBusy = () => [...sessions.values()].some((session) => session.controller);
+
+async function endSession(session) {
+  clearTimeout(session.idle);
+  if (!session.controller) return;
+  session.controller = null;
+  if (!controller && !remoteBusy()) setRunning(false);
+  await session.executor?.endTask();
+}
+
+async function dropSessionExecutor(session) {
+  await endSession(session);
+  session.executor?.dispose();
+  session.executor = null;
+}
+
+function sessionExecutor(session) {
+  session.executor ??= new BrowserExecutor({
+    confirm: (request) => askUser({ ...request, title: `[${session.label}] ${request.title}` }),
+    settings,
+    persistHost,
+    ownWindow: true,
+    onDetachedByUser: () => {
+      append('error', `Bạn đã tắt quyền điều khiển tab, phiên ${session.label} đã dừng.`);
+      session.stopped = true;
+      session.controller?.abort();
+      endSession(session);
+    },
+  });
+  session.executor.settings = settings;
+  session.executor.documents = attachments;
+  return session.executor;
+}
+
+/** A tab some other connected session is already driving. */
+function ownedElsewhere(session, tabId) {
+  return [...sessions.values()].some((other) => other !== session && other.state === 'connected' && other.executor?.managed.has(tabId));
+}
+
+async function remoteCall(session, name, input) {
+  if (controller) return remoteError('The user is running a task from the side panel. Wait for it to finish, then try again.');
+  if (session.stopped) {
+    session.stopped = false;
+    return remoteError('The user pressed Stop in the side panel. Ask the user before continuing.');
+  }
+  const exec = sessionExecutor(session);
+  if (!session.controller) {
+    session.controller = new AbortController();
+    setRunning(true);
+    await exec.beginTask(session.controller.signal);
+    // Two sessions must not share a tab: leave the user's tab to the session already on it.
+    if (exec.activeTab !== null && ownedElsewhere(session, exec.activeTab)) {
+      exec.managed.delete(exec.activeTab);
+      exec.activeTab = [...exec.managed].at(-1) ?? null;
+    }
+  }
+  clearTimeout(session.idle);
+  logAction(name, input, 'action remote', `Claude Code (${session.label})`);
+  let result = await exec.run({ id: 'bridge', name, input });
+  if (result.is_error && /No tab is open/.test(String(result.content))) {
+    result = remoteError('This session has no tab yet, and the active tab belongs to another Claude Code session. Call new_tab to open a tab of your own.');
+  }
+  if (result.is_error) append('error', `[${session.label}] ${String(result.content)}`);
+  // Detach (and drop Chrome's debugging bar) once this session goes quiet.
+  if (session.controller) session.idle = setTimeout(() => endSession(session), REMOTE_IDLE_MS);
+  return result;
+}
+
+function showBridge() {
+  const list = [...sessions.values()];
+  const connected = list.filter((session) => session.state === 'connected');
+  const errors = [...new Set(list.filter((session) => session.state === 'error').map((session) => session.detail))];
+  const base = settings.bridge.port;
+  const lines = [];
+  if (connected.length) lines.push(`Đã kết nối: ${connected.map((session) => `${session.label} (cổng ${session.port})`).join(', ')}.`);
+  else if (list.length) lines.push(`Đang chờ Claude Code ở cổng ${base}–${base + BRIDGE_PORTS - 1}…`);
+  lines.push(...errors);
+  $('bridgeStatus').textContent = lines.join(' ');
+  const badge = $('bridgeBadge');
+  badge.hidden = !list.length;
+  badge.textContent = connected.length > 1 ? `Claude Code ×${connected.length}` : connected.length ? 'Claude Code' : 'Claude Code ✕';
+  badge.title = $('bridgeStatus').textContent;
+  badge.classList.toggle('on', connected.length > 0);
+}
+
+/** Keeps one client per port in the range while the bridge is enabled. */
+function configureBridges() {
+  const { enabled, port, token } = settings.bridge;
+  const wanted = new Set(enabled ? Array.from({ length: BRIDGE_PORTS }, (_, i) => port + i) : []);
+  for (const [sessionPort, session] of sessions) {
+    if (wanted.has(sessionPort)) continue;
+    session.client.configure({ enabled: false });
+    dropSessionExecutor(session);
+    sessions.delete(sessionPort);
+  }
+  for (const sessionPort of wanted) {
+    let session = sessions.get(sessionPort);
+    if (!session) {
+      session = { port: sessionPort, state: 'off', detail: '', label: `Claude Code :${sessionPort}`, executor: null, controller: null, idle: null, stopped: false };
+      session.client = new BridgeClient({
+        onCall: (name, input) => remoteCall(session, name, input),
+        onState: (state, detail = '', info = {}) => {
+          const was = session.state;
+          session.state = state;
+          session.detail = detail;
+          if (state === 'connected') session.label = info.label || `Claude Code :${sessionPort}`;
+          // A new connection is a new Claude Code session: start it with fresh tabs and approvals.
+          if (was === 'connected' && state !== 'connected') {
+            session.stopped = false;
+            dropSessionExecutor(session);
+          }
+          showBridge();
+        },
+        hello: () => ({ mode: settings.mode, tools: settings.tools }),
+      });
+      sessions.set(sessionPort, session);
+    }
+    session.client.configure({ enabled: true, port: sessionPort, token });
+    session.client.sendStatus();
+  }
+  showBridge();
+}
+
+function logAction(name, input, className = 'action', session = '') {
+  const node = append(className, describeAction(name, input));
+  if (session) node.dataset.session = session;
+  if (name === 'javascript_exec') {
+    const code = document.createElement('span');
+    code.className = 'code';
+    code.textContent = String(input.text ?? '').slice(0, 4000);
+    node.append(code);
+  }
 }
 
 async function submitTask(text) {
@@ -198,18 +361,7 @@ async function submitTask(text) {
   controller = new AbortController();
   setRunning(true);
 
-  executor ??= new BrowserExecutor({
-    confirm: askUser,
-    settings,
-    persistHost,
-    onDetachedByUser: () => {
-      append('error', 'Bạn đã tắt quyền điều khiển tab, tác vụ đã dừng.');
-      stopTask();
-    },
-  });
-  executor.settings = settings;
-
-  executor.documents = attachments;
+  ensureExecutor();
   let request = text;
   if (settings.tools.file_upload && attachments.size) {
     const list = [...attachments].map(([id, file]) => `${id}: ${file.name} (${file.type || 'unknown type'}, ${file.size} bytes)`).join('; ');
@@ -225,15 +377,7 @@ async function submitTask(text) {
       signal: controller.signal,
       ui: {
         onText: (said) => append('msg', said),
-        onAction: (name, input) => {
-          const node = append('action', describeAction(name, input));
-          if (name === 'javascript_exec') {
-            const code = document.createElement('span');
-            code.className = 'code';
-            code.textContent = String(input.text ?? '').slice(0, 4000);
-            node.append(code);
-          }
-        },
+        onAction: (name, input) => logAction(name, input),
         onActionError: (_name, error) => append('error', String(error)),
         onNotice: (notice) => append('muted', notice),
         onUsage: (usage) => {
@@ -258,7 +402,7 @@ async function submitTask(text) {
 $('composer').addEventListener('submit', (event) => {
   event.preventDefault();
   const text = $('prompt').value.trim();
-  if (text && !controller) submitTask(text);
+  if (text && !controller && !remoteBusy()) submitTask(text);
 });
 $('prompt').addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -266,10 +410,10 @@ $('prompt').addEventListener('keydown', (event) => {
     $('composer').requestSubmit();
   }
 });
-$('stop').addEventListener('click', stopTask);
+$('stop').addEventListener('click', () => stopTask());
 $('toggleSettings').addEventListener('click', () => { $('settings').hidden = !$('settings').hidden; });
 $('newChat').addEventListener('click', () => {
-  stopTask();
+  stopTask({ byUser: false });
   messages = [];
   totals.input = 0;
   totals.output = 0;
@@ -277,6 +421,7 @@ $('newChat').addEventListener('click', () => {
   $('log').replaceChildren();
   executor?.dispose();
   executor = null;
+  for (const session of sessions.values()) dropSessionExecutor(session);
   attachments.clear();
   renderAttachments();
 });
@@ -288,12 +433,19 @@ $('settings').addEventListener('submit', async (event) => {
   settings.mode = $('mode').value;
   settings.approvedHosts = $('hosts').value.split('\n').map((line) => line.trim()).filter(Boolean);
   settings.tools = Object.fromEntries([...document.querySelectorAll('[data-tool]')].map((box) => [box.dataset.tool, box.checked]));
+  settings.bridge = {
+    enabled: $('bridgeEnabled').checked,
+    port: Number($('bridgePort').value) || DEFAULTS.bridge.port,
+    token: $('bridgeToken').value.trim(),
+  };
   renderAttachments();
   await saveSettings();
+  configureBridges();
   // Drop session approvals so a site removed from the list really loses access.
-  if (!controller) {
+  if (!controller && !remoteBusy()) {
     executor?.dispose();
     executor = null;
+    for (const session of sessions.values()) dropSessionExecutor(session);
   }
   $('settings').hidden = true;
   if (settings.apiKey && before !== `${apiBase(settings.baseUrl)}|${settings.authType}|${settings.apiKey}`) refreshModels();
@@ -317,8 +469,13 @@ $('modelSelect').addEventListener('change', () => {
   $('hosts').value = settings.approvedHosts.join('\n');
   settings.tools = { ...settings.tools };
   for (const box of document.querySelectorAll('[data-tool]')) box.checked = Boolean(settings.tools[box.dataset.tool]);
+  settings.bridge = { ...DEFAULTS.bridge, ...settings.bridge };
+  $('bridgeEnabled').checked = settings.bridge.enabled;
+  $('bridgePort').value = settings.bridge.port;
+  $('bridgeToken').value = settings.bridge.token;
   renderAttachments();
-  if (!settings.apiKey) $('settings').hidden = false;
+  configureBridges();
+  if (!settings.apiKey && !settings.bridge.enabled) $('settings').hidden = false;
 })();
 
 function renderAttachments() {

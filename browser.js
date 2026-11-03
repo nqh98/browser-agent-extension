@@ -83,9 +83,12 @@ export class BrowserExecutor {
    * @param confirm async ({kind, title, detail, sensitive}) => 'allow' | 'always' | 'allow_all' | 'deny'
    * @param settings object with mode ('ask' | 'auto') and approvedHosts (array)
    * @param persistHost async (host) => void, saves an "always allow" site
+   * @param ownWindow new_tab opens this executor's tabs in a window of its own, so
+   *   several executors running at once do not take turns on one window's active tab
    */
-  constructor({ confirm, settings, persistHost, onDetachedByUser }) {
+  constructor({ confirm, settings, persistHost, onDetachedByUser, ownWindow = false }) {
     this.confirm = confirm;
+    this.ownWindow = ownWindow;
     this.settings = settings;
     this.persistHost = persistHost;
     this.onDetachedByUser = onDetachedByUser;
@@ -125,7 +128,8 @@ export class BrowserExecutor {
       if (this.activeTab === tabId) this.activeTab = [...this.managed].at(-1) ?? null;
     };
     this.handleDetach = (source, reason) => {
-      this.attached.delete(source.tabId);
+      // Other executors attach to other tabs; only react to our own.
+      if (!this.attached.delete(source.tabId)) return;
       this.capturing.delete(source.tabId);
       if (reason === 'canceled_by_user') this.onDetachedByUser?.();
     };
@@ -375,7 +379,7 @@ export class BrowserExecutor {
 
   async tabMember(name, input) {
     if (name === 'new_tab') {
-      const created = await chrome.tabs.create({ active: true, url: 'about:blank' });
+      const created = this.ownWindow ? await this.createInOwnWindow() : await chrome.tabs.create({ active: true, url: 'about:blank' });
       this.managed.add(created.id);
       this.activeTab = created.id;
       this.pendingOpened.delete(created.id);
@@ -392,6 +396,16 @@ export class BrowserExecutor {
       this.handleRemoved(id);
     }
     return [this.addChanges(await this.browserState())];
+  }
+
+  async createInOwnWindow() {
+    for (const id of this.managed) {
+      const tab = await chrome.tabs.get(id).catch(() => null);
+      if (tab && this.ownWindowId === tab.windowId) return chrome.tabs.create({ windowId: tab.windowId, active: true, url: 'about:blank' });
+    }
+    const window = await chrome.windows.create({ url: 'about:blank', focused: true });
+    this.ownWindowId = window.id;
+    return window.tabs[0];
   }
 
   // ---- Approvals ----

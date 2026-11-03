@@ -1,0 +1,11 @@
+{
+  "name": "browser-agent-extension",
+  "owner": { "name": "huynq" },
+  "plugins": [
+    {
+      "name": "browser-agent",
+      "source": "./claude-code",
+      "description": "Drive Chrome from Claude Code through the Browser Agent extension."
+    }
+  ]
+}
