@@ -6,55 +6,137 @@
   <title>Browser Agent</title>
   <link rel="stylesheet" href="sidepanel.css">
 </head>
-<body>
+<body data-usage="">
   <header>
-    <strong>Browser Agent</strong>
-    <span id="usage" class="muted"></span>
+    <button id="modeSwitch" type="button" class="mode-pill" title="Đổi cách dùng">
+      <span id="modeDot" class="dot"></span>
+      <span id="modeLabel">Browser Agent</span>
+      <span aria-hidden="true">▾</span>
+    </button>
+    <span id="usage" class="muted" data-for="chat"></span>
     <span class="spacer"></span>
-    <button id="newChat" class="ghost" title="Cuộc trò chuyện mới">Mới</button>
-    <button id="toggleSettings" class="ghost" title="Cài đặt">Cài đặt</button>
+    <button id="newChat" class="ghost" data-for="chat" title="Bắt đầu cuộc trò chuyện mới">Mới</button>
+    <button id="toggleSettings" class="ghost icon" title="Cài đặt" aria-label="Cài đặt">⚙</button>
   </header>
 
+  <section id="welcome" hidden>
+    <h1>Bạn muốn dùng Browser Agent thế nào?</h1>
+    <p class="muted">Có thể đổi lại bất cứ lúc nào bằng nút ở góc trên bên trái.</p>
+    <button type="button" class="choice" data-usage="chat">
+      <span class="choice-title">💬 Chat trong panel</span>
+      <span class="choice-text">Giao việc ngay tại đây, tác tử thao tác trên tab đang mở.</span>
+      <span class="choice-need">Cần API key Claude (hoặc gateway công ty).</span>
+    </button>
+    <button type="button" class="choice" data-usage="code">
+      <span class="choice-title">⌨️ Điều khiển từ Claude Code</span>
+      <span class="choice-text">Claude Code trong terminal thao tác trình duyệt, panel này hiện từng bước và hỏi bạn khi cần.</span>
+      <span class="choice-need">Không cần API key. Cần plugin browser-agent cho Claude Code.</span>
+    </button>
+    <button id="cancelWelcome" type="button" class="ghost" hidden>Giữ nguyên</button>
+  </section>
+
   <form id="settings" hidden>
-    <label>API key
-      <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-...">
-    </label>
-    <label>Model
-      <input id="model" list="models" spellcheck="false">
-      <datalist id="models">
-        <option value="claude-sonnet-5-5"></option>
-        <option value="claude-opus-5-5"></option>
-        <option value="claude-haiku-5-5"></option>
-        <option value="claude-fable-5-1"></option>
-      </datalist>
-    </label>
-    <label>Quyền thao tác
-      <select id="mode">
-        <option value="ask">Hỏi trước mỗi thao tác thay đổi trang</option>
-        <option value="auto">Tự động, chỉ hỏi thao tác nhạy cảm</option>
-      </select>
-    </label>
-    <label>Trang luôn được phép (mỗi dòng một tên miền)
-      <textarea id="hosts" rows="3" spellcheck="false" placeholder="example.com"></textarea>
-    </label>
-    <fieldset>
-      <legend>Tool tùy chọn (tắt mặc định)</legend>
-      <label class="check"><input type="checkbox" data-tool="read_console"> Đọc console của trang</label>
-      <label class="check"><input type="checkbox" data-tool="read_network"> Đọc các request mạng</label>
-      <label class="check"><input type="checkbox" data-tool="file_upload"> Tải lên tệp bạn đính kèm</label>
-      <label class="check"><input type="checkbox" data-tool="javascript_exec"> Chạy JavaScript trên trang</label>
-      <p class="muted">JavaScript chạy với toàn quyền của trang, gồm cookie và tài khoản đang đăng nhập. Chỉ bật khi dùng hồ sơ Chrome không đăng nhập tài khoản quan trọng. Tác tử chỉ tải lên được tệp bạn đính kèm bằng nút 📎.</p>
-    </fieldset>
-    <p class="muted">API key được lưu không mã hóa trong hồ sơ Chrome này. Đừng dùng trên máy dùng chung.</p>
-    <button type="submit">Lưu</button>
+    <section class="group" data-for="chat">
+      <h2>Kết nối Claude API</h2>
+      <label>API key
+        <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-...">
+        <span class="note">Lưu không mã hóa trong hồ sơ Chrome này. Đừng dùng trên máy dùng chung.</span>
+      </label>
+      <div class="field">
+        <span>Model</span>
+        <div class="row">
+          <select id="modelSelect" hidden></select>
+          <input id="model" list="models" spellcheck="false">
+          <button id="refreshModels" type="button" class="ghost" title="Kiểm tra key và tải danh sách model được phép">Kiểm tra</button>
+        </div>
+        <datalist id="models">
+          <option value="claude-sonnet-5-5"></option>
+          <option value="claude-opus-5-5"></option>
+          <option value="claude-haiku-5-5"></option>
+          <option value="claude-fable-5-1"></option>
+        </datalist>
+        <span id="modelStatus" class="note"></span>
+      </div>
+      <label class="check"><input id="useGateway" type="checkbox"> Dùng gateway công ty</label>
+      <div id="gatewayFields" class="sub" hidden>
+        <label>API base URL
+          <input id="baseUrl" type="url" spellcheck="false" placeholder="https://gateway.congty.vn/anthropic">
+        </label>
+        <label>Kiểu xác thực
+          <select id="authType">
+            <option value="x-api-key">x-api-key (như Anthropic)</option>
+            <option value="bearer">Authorization: Bearer</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <section class="group" data-for="code">
+      <h2>Kết nối Claude Code</h2>
+      <p class="note">Không cần cấu hình: mỗi terminal Claude Code có plugin browser-agent tự kết nối tới panel này.</p>
+      <details id="bridgeAdvanced">
+        <summary>Nâng cao</summary>
+        <label>Cổng đầu
+          <input id="bridgePort" type="number" min="1024" max="65526" placeholder="18765">
+          <span class="note">Mỗi phiên dùng một cổng trong 10 cổng từ đây. Đổi khi đặt BROWSER_AGENT_PORT cho Claude Code.</span>
+        </label>
+        <label>Token
+          <input id="bridgeToken" type="password" autocomplete="off" spellcheck="false" placeholder="để trống nếu không đặt BROWSER_AGENT_TOKEN">
+          <span class="note">Chỉ cần trên máy có nhiều người dùng hệ điều hành.</span>
+        </label>
+      </details>
+    </section>
+
+    <section class="group">
+      <h2>Quyền</h2>
+      <div class="field">
+        <span>Mức tự động</span>
+        <div class="segmented" role="radiogroup" aria-label="Mức tự động">
+          <label><input type="radio" name="mode" value="ask"><span>Hỏi mọi thao tác</span></label>
+          <label><input type="radio" name="mode" value="auto"><span>Chỉ hỏi thao tác nhạy cảm</span></label>
+        </div>
+        <span class="note">Thao tác nhạy cảm (mua, xóa, gửi, ô mật khẩu…) luôn được hỏi. Việc nhận diện dựa trên từ khóa nên có thể bỏ sót.</span>
+      </div>
+      <label>Trang luôn được phép
+        <textarea id="hosts" rows="3" spellcheck="false" placeholder="example.com&#10;mỗi dòng một tên miền"></textarea>
+      </label>
+      <details id="toolsBox">
+        <summary>Tool tùy chọn <span id="toolsCount" class="muted"></span></summary>
+        <label class="check"><input type="checkbox" data-tool="read_console"> Đọc console của trang</label>
+        <label class="check"><input type="checkbox" data-tool="read_network"> Đọc các request mạng</label>
+        <label class="check"><input type="checkbox" data-tool="file_upload"> Tải lên tệp bạn đính kèm (nút 📎)</label>
+        <label class="check"><input type="checkbox" data-tool="javascript_exec"> Chạy JavaScript trên trang</label>
+        <span class="note warn">JavaScript chạy với toàn quyền của trang, gồm cookie và tài khoản đang đăng nhập. Chỉ bật trong hồ sơ Chrome không đăng nhập tài khoản quan trọng.</span>
+      </details>
+    </section>
+
+    <div class="actions">
+      <button type="submit">Lưu</button>
+      <button id="closeSettings" type="button" class="ghost">Đóng</button>
+    </div>
   </form>
 
-  <main id="log" aria-live="polite">
-    <p class="muted hint">Giao việc cho tác tử trên tab đang mở, ví dụ: "Tóm tắt trang này" hoặc "Tìm chuyến bay rẻ nhất tới Đà Nẵng".</p>
-  </main>
+  <section id="sessions" data-for="code">
+    <div id="sessionList"></div>
+    <div id="setupGuide">
+      <strong>Chưa có phiên Claude Code nào</strong>
+      <ol>
+        <li>Trong Claude Code, cài plugin:
+          <div class="copy"><code>/plugin marketplace add nqh98/browser-agent-extension</code><button type="button" class="ghost" data-copy>Sao chép</button></div>
+          <div class="copy"><code>/plugin install browser-agent@browser-agent-extension</code><button type="button" class="ghost" data-copy>Sao chép</button></div>
+        </li>
+        <li>Khởi động lại Claude Code.</li>
+        <li>Giữ panel này mở và giao việc cho Claude Code, ví dụ "mở example.com và tóm tắt trang".</li>
+      </ol>
+    </div>
+    <span id="bridgeStatus" class="note"></span>
+    <button id="attachCode" type="button" class="ghost small" title="Tệp đính kèm hiện trong bridge_status với mã doc-N" hidden>📎 Đính kèm tệp cho Claude Code tải lên</button>
+  </section>
+
+  <main id="log" aria-live="polite"></main>
 
   <div id="attachments" hidden></div>
-  <form id="composer">
+  <form id="composer" data-for="chat">
     <button id="attach" type="button" class="ghost" title="Đính kèm tệp để tác tử tải lên" hidden>📎</button>
     <input id="files" type="file" multiple hidden>
     <textarea id="prompt" rows="2" placeholder="Bạn muốn làm gì trên trang này?"></textarea>

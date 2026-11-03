@@ -30,7 +30,19 @@ function refIn(text, re) {
   return /\[(ref_\d+)\]/.exec(line)[1];
 }
 
+const modelRequests = []; // { url, headers }
+const apiHeaders = []; // headers of each POST /v1/messages
+let modelList = { data: [{ id: 'claude-sonnet-5-5', display_name: 'Claude Sonnet 5.5' }], has_more: false, last_id: 'claude-sonnet-5-5' };
+
 async function handleApi(route) {
+  const request = route.request();
+  if (request.method() === 'GET' && new URL(request.url()).pathname.endsWith('/v1/models')) {
+    modelRequests.push({ url: request.url(), headers: request.headers() });
+    const body = typeof modelList === 'function' ? modelList(new URL(request.url())) : modelList;
+    return route.fulfill({ status: body.status || 200, contentType: 'application/json', body: JSON.stringify(body.body || body) });
+  }
+  if (request.method() !== 'POST') return route.fulfill({ status: 405, contentType: 'application/json', body: '{}' });
+  apiHeaders.push({ url: request.url(), headers: request.headers() });
   const body = JSON.parse(route.request().postData());
   requests.push(body);
   formatErrors.push(...validate(body, imageSizes).map((e) => `[${current}] ${e}`));
@@ -62,6 +74,7 @@ let current = '';
     args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`],
   });
   await ctx.route('https://api.anthropic.com/**', handleApi);
+  await ctx.route('https://gateway.example.test/**', handleApi);
   let [sw] = ctx.serviceWorkers();
   if (!sw) sw = await ctx.waitForEvent('serviceworker');
   const extId = new URL(sw.url()).host;
@@ -81,10 +94,22 @@ let current = '';
     chrome.tabs.query = async (q) => (q.active && q.currentWindow ? [await chrome.tabs.get(window.__target)] : orig(q));
   }, targetId);
 
-  // Configure through the real settings form.
+  // First run: choose chat, then configure through the real settings form.
+  const firstRun = await panel.evaluate(() => ({
+    welcome: !document.getElementById('welcome').hidden,
+    settings: getComputedStyle(document.getElementById('settings')).display,
+    composer: getComputedStyle(document.getElementById('composer')).display,
+  }));
+  await panel.click('#welcome [data-usage=chat]');
+  const chatOpen = await panel.evaluate(() => ({
+    settings: !document.getElementById('settings').hidden,
+    gateway: document.getElementById('gatewayFields').checkVisibility(),
+    bridge: document.getElementById('bridgeAdvanced').checkVisibility(),
+    focused: document.activeElement?.id,
+  }));
   await panel.fill('#apiKey', 'sk-ant-test');
   await panel.fill('#model', 'claude-sonnet-5-5');
-  await panel.selectOption('#mode', 'ask');
+  await panel.click('.segmented input[value=ask] + span');
   await panel.click('#settings button[type=submit]');
 
   const prompts = [];
@@ -129,6 +154,10 @@ let current = '';
   const resultsOf = (r) => r.requests.flatMap((b) => { const l = b.messages.at(-1); return Array.isArray(l.content) ? l.content.filter((x) => x.type === 'tool_result') : []; });
   const G = (expr) => site.evaluate(expr);
   const center = async (sel) => site.$eval(sel, (e) => { const r = e.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; });
+
+  check('first run shows only the usage choice', firstRun.welcome && firstRun.settings === 'none' && firstRun.composer === 'none', JSON.stringify(firstRun));
+  check('choosing chat opens API settings without Claude Code or gateway fields', chatOpen.settings && !chatOpen.gateway && !chatOpen.bridge && chatOpen.focused === 'apiKey', JSON.stringify(chatOpen));
+  check('header shows chat mode with a key', await panel.$eval('#modeLabel', (n) => n.textContent) === 'Chat' && await panel.$eval('#modeDot', (n) => n.classList.contains('on')));
 
   // ---------- 1. Site permission + reading ----------
   let r = await runTask('read', 'Tóm tắt trang này', [
@@ -223,7 +252,7 @@ let current = '';
 
   // ---------- 4. Sensitive actions in auto mode ----------
   await panel.click('#toggleSettings');
-  await panel.selectOption('#mode', 'auto');
+  await panel.click('.segmented input[value=auto] + span');
   await panel.click('#settings button[type=submit]');
   await site.evaluate(() => window.scrollTo(0, 0));
   r = await runTask('sensitive', 'Xóa tài khoản', [
@@ -424,8 +453,10 @@ let current = '';
 
   // ---------- 14. Optional tools ----------
   await panel.click('#toggleSettings');
+  await panel.click('#toolsBox > summary');
   for (const tool of ['read_console', 'read_network', 'file_upload', 'javascript_exec']) await panel.check(`[data-tool=${tool}]`);
-  await panel.selectOption('#mode', 'auto');
+  check('optional tools summary counts enabled tools', await panel.$eval('#toolsCount', (n) => n.textContent) === '(4 đang bật)');
+  await panel.click('.segmented input[value=auto] + span');
   await panel.click('#settings button[type=submit]');
   check('attach button appears when file_upload enabled', await panel.isVisible('#attach'));
   await panel.setInputFiles('#files', [{ name: 'cv.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 test') }, { name: 'photo.png', mimeType: 'image/png', buffer: Buffer.alloc(2048, 1) }]);
@@ -488,6 +519,48 @@ let current = '';
   check('download completed with size and no path', done && done.size_bytes === 8 && !('path' in done) && /\/download$/.test(done.url), JSON.stringify(changes));
   check('each download event reported once', changes.filter((c) => c.type === 'download_completed').length === 1, JSON.stringify(changes));
   check('no format errors (downloads)', r.newErrors === 0, formatErrors.concat(scriptErrors).join('\n'));
+
+  // ---------- 16. Company gateway: base URL, bearer auth, allowed models ----------
+  check('default setup calls api.anthropic.com with x-api-key', apiHeaders.length && apiHeaders.every((h) => h.url === 'https://api.anthropic.com/v1/messages' && h.headers['x-api-key'] === 'sk-ant-test' && !h.headers.authorization), JSON.stringify(apiHeaders.slice(0, 2)));
+  check('saving a new key loads the allowed models', modelRequests.length === 1 && modelRequests[0].url.startsWith('https://api.anthropic.com/v1/models'), JSON.stringify(modelRequests));
+  modelList = (url) => (url.searchParams.get('after_id')
+    ? { data: [{ id: 'team-haiku' }], has_more: false, last_id: 'team-haiku' }
+    : { data: [{ id: 'team-sonnet', display_name: 'Team Sonnet' }, { id: 'team-opus' }], has_more: true, last_id: 'team-opus' });
+  await panel.click('#toggleSettings');
+  check('gateway fields hidden until asked for', !(await panel.isVisible('#baseUrl')));
+  await panel.check('#useGateway');
+  await panel.fill('#baseUrl', 'https://gateway.example.test/anthropic/v1/');
+  await panel.selectOption('#authType', 'bearer');
+  await panel.fill('#apiKey', 'gw-key');
+  modelRequests.length = 0;
+  await panel.click('#refreshModels');
+  await panel.waitForFunction(() => !document.getElementById('refreshModels').disabled);
+  const options = await panel.$$eval('#modelSelect option', (ns) => ns.map((n) => n.value));
+  check('gateway models fetched with bearer auth from normalized base URL', modelRequests.length === 2
+    && modelRequests.every((m) => m.url.startsWith('https://gateway.example.test/anthropic/v1/models') && m.headers.authorization === 'Bearer gw-key' && !m.headers['x-api-key'])
+    && new URL(modelRequests[1].url).searchParams.get('after_id') === 'team-opus', JSON.stringify(modelRequests));
+  check('all pages of gateway models listed, plus custom entry', JSON.stringify(options) === JSON.stringify(['team-sonnet', 'team-opus', 'team-haiku', '__custom__']), JSON.stringify(options));
+  check('model not allowed by gateway is flagged', await panel.$eval('#modelStatus', (n) => /3 model.*"claude-sonnet-5-5" không có trong danh sách/.test(n.textContent)), await panel.$eval('#modelStatus', (n) => n.textContent));
+  await panel.selectOption('#modelSelect', 'team-opus');
+  check('text box hidden when a listed model is picked', await panel.$eval('#model', (n) => n.hidden));
+  await panel.click('#settings button[type=submit]');
+  apiHeaders.length = 0;
+  r = await runTask('gateway', 'Xin chào', [[say('Chào bạn.')]]);
+  check('task goes to gateway with bearer auth and chosen model', apiHeaders.length === 1 && apiHeaders[0].url === 'https://gateway.example.test/anthropic/v1/messages'
+    && apiHeaders[0].headers.authorization === 'Bearer gw-key' && !apiHeaders[0].headers['x-api-key'] && r.requests[0]?.model === 'team-opus', JSON.stringify({ h: apiHeaders, model: r.requests[0]?.model }));
+  await panel.click('#toggleSettings');
+  await panel.selectOption('#modelSelect', '__custom__');
+  await panel.fill('#model', 'team-experimental');
+  await panel.click('#settings button[type=submit]');
+  r = await runTask('gateway custom model', 'Xin chào', [[say('Chào.')]]);
+  check('custom model name still usable with a gateway list', r.requests[0]?.model === 'team-experimental', r.requests[0]?.model);
+  modelList = { status: 404, body: { error: { message: 'not found' } } };
+  await panel.click('#toggleSettings');
+  await panel.click('#refreshModels');
+  await panel.waitForFunction(() => !document.getElementById('refreshModels').disabled);
+  check('gateway without /v1/models explains manual entry', await panel.$eval('#modelStatus', (n) => /không hỗ trợ \/v1\/models/.test(n.textContent)), await panel.$eval('#modelStatus', (n) => n.textContent));
+  await panel.click('#toggleSettings');
+  check('no format errors (gateway)', r.newErrors === 0, formatErrors.concat(scriptErrors).join('\n'));
 
   console.log('\nFORMAT ERRORS:', formatErrors.length ? `\n${formatErrors.join('\n')}` : 'none');
   console.log('SCRIPT ERRORS:', scriptErrors.length ? `\n${scriptErrors.join('\n')}` : 'none');

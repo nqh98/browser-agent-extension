@@ -1,5 +1,5 @@
 // Messages API agent loop for the browser toolset.
-const API_URL = 'https://api.anthropic.com/v1/messages';
+const DEFAULT_BASE_URL = 'https://api.anthropic.com';
 const NOT_EXECUTED = 'Not executed: an earlier action in this turn failed.';
 const MAX_TURNS = 50;
 const KEEP_IMAGES = 6;
@@ -72,17 +72,57 @@ function describeApiError(status, body) {
   return `Lỗi API: ${detail}`;
 }
 
-async function callApi(apiKey, payload, signal) {
+/** Normalizes a user-entered base URL: empty means Anthropic; a trailing /v1 or slash is dropped. */
+export function apiBase(baseUrl) {
+  const trimmed = String(baseUrl || '').trim().replace(/\/+$/, '').replace(/\/v1$/, '');
+  return trimmed || DEFAULT_BASE_URL;
+}
+
+/** Headers for the Anthropic API or a company gateway in front of it. */
+export function apiHeaders(settings) {
+  const headers = {
+    'anthropic-version': '2023-06-01',
+    'anthropic-dangerous-direct-browser-access': 'true',
+  };
+  if (settings.authType === 'bearer') headers.authorization = `Bearer ${settings.apiKey}`;
+  else headers['x-api-key'] = settings.apiKey;
+  return headers;
+}
+
+/**
+ * Lists the models the key may use, from GET /v1/models. Accepts the Anthropic
+ * shape (data, has_more, last_id) and the plain OpenAI-style { data: [{ id }] }.
+ */
+export async function listModels(settings, signal) {
+  const models = [];
+  let after = '';
+  for (let page = 0; page < 20; page++) {
+    const url = new URL(`${apiBase(settings.baseUrl)}/v1/models`);
+    url.searchParams.set('limit', '1000');
+    if (after) url.searchParams.set('after_id', after);
+    const response = await fetch(url, { signal, headers: apiHeaders(settings) });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      if (response.status === 404) throw new Error('Gateway không hỗ trợ /v1/models. Hãy nhập tên model thủ công.');
+      throw new Error(describeApiError(response.status, body));
+    }
+    const data = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
+    for (const item of data) {
+      const id = typeof item === 'string' ? item : item?.id;
+      if (id && !models.some((m) => m.id === id)) models.push({ id, name: item?.display_name || '' });
+    }
+    if (!body?.has_more || !body?.last_id || body.last_id === after) break;
+    after = body.last_id;
+  }
+  return models;
+}
+
+async function callApi(settings, payload, signal) {
   for (let attempt = 0; ; attempt++) {
-    const response = await fetch(API_URL, {
+    const response = await fetch(`${apiBase(settings.baseUrl)}/v1/messages`, {
       method: 'POST',
       signal,
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
+      headers: { 'content-type': 'application/json', ...apiHeaders(settings) },
       body: JSON.stringify(payload),
     });
     const body = await response.json().catch(() => null);
@@ -128,7 +168,7 @@ export async function runTask({ text, messages, settings, executor, signal, ui }
   try {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       if (signal.aborted) return;
-      const response = await callApi(settings.apiKey, buildRequest(settings.model, messages, settings.tools), signal);
+      const response = await callApi(settings, buildRequest(settings.model, messages, settings.tools), signal);
       ui.onUsage?.(response.usage);
       messages.push({ role: 'assistant', content: response.content });
 
