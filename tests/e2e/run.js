@@ -70,7 +70,7 @@ let current = '';
 (async () => {
   const server = await start(PORT);
   const ctx = await chromium.launchPersistentContext('', {
-    headless: true, channel: 'chromium', viewport: { width: 1280, height: 720 },
+    headless: true, channel: 'chromium', viewport: { width: 1280, height: 720 }, locale: 'vi-VN',
     args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`],
   });
   await ctx.route('https://api.anthropic.com/**', handleApi);
@@ -99,7 +99,10 @@ let current = '';
     welcome: !document.getElementById('welcome').hidden,
     settings: getComputedStyle(document.getElementById('settings')).display,
     composer: getComputedStyle(document.getElementById('composer')).display,
+    title: document.querySelector('#welcome h1').textContent,
+    lang: document.documentElement.lang,
   }));
+  check('Vietnamese browser: panel starts in Vietnamese', firstRun.lang === 'vi' && firstRun.title === 'Bạn muốn dùng Browser Agent thế nào?', JSON.stringify(firstRun));
   await panel.click('#welcome [data-usage=chat]');
   const chatOpen = await panel.evaluate(() => ({
     settings: !document.getElementById('settings').hidden,

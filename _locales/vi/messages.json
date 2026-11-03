@@ -1,0 +1,5 @@
+{
+  "extName": { "message": "Browser Agent" },
+  "extDescription": { "message": "Tác tử trong side panel đọc và thao tác trang web, bằng API key Claude của bạn hoặc qua Claude Code trong terminal. Không chính thức, không liên kết với Anthropic." },
+  "actionTitle": { "message": "Mở Browser Agent" }
+}

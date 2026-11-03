@@ -1,53 +1,58 @@
 <!doctype html>
-<html lang="vi">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Browser Agent</title>
   <link rel="stylesheet" href="sidepanel.css">
 </head>
+<!-- Text comes from i18n.js: data-i18n sets textContent; -placeholder, -title and -aria-label set those attributes. -->
 <body data-usage="">
   <header>
-    <button id="modeSwitch" type="button" class="mode-pill" title="Đổi cách dùng">
+    <button id="modeSwitch" type="button" class="mode-pill" data-i18n-title="header.mode">
       <span id="modeDot" class="dot"></span>
       <span id="modeLabel">Browser Agent</span>
       <span aria-hidden="true">▾</span>
     </button>
     <span id="usage" class="muted" data-for="chat"></span>
     <span class="spacer"></span>
-    <button id="newChat" class="ghost" data-for="chat" title="Bắt đầu cuộc trò chuyện mới">Mới</button>
-    <button id="toggleSettings" class="ghost icon" title="Cài đặt" aria-label="Cài đặt">⚙</button>
+    <button id="newChat" class="ghost" data-for="chat" data-i18n="header.new" data-i18n-title="header.newTitle"></button>
+    <button id="toggleSettings" class="ghost icon" data-i18n-title="header.settings" data-i18n-aria-label="header.settings">⚙</button>
   </header>
 
   <section id="welcome" hidden>
-    <h1>Bạn muốn dùng Browser Agent thế nào?</h1>
-    <p class="muted">Có thể đổi lại bất cứ lúc nào bằng nút ở góc trên bên trái.</p>
+    <div class="lang-switch" role="group" data-i18n-aria-label="welcome.language">
+      <button type="button" class="ghost small" data-lang="en">English</button>
+      <button type="button" class="ghost small" data-lang="vi">Tiếng Việt</button>
+    </div>
+    <h1 data-i18n="welcome.title"></h1>
+    <p class="muted" data-i18n="welcome.sub"></p>
     <button type="button" class="choice" data-usage="chat">
-      <span class="choice-title">💬 Chat trong panel</span>
-      <span class="choice-text">Giao việc ngay tại đây, tác tử thao tác trên tab đang mở.</span>
-      <span class="choice-need">Cần API key Claude (hoặc gateway công ty).</span>
+      <span class="choice-title" data-i18n="welcome.chat.title"></span>
+      <span class="choice-text" data-i18n="welcome.chat.text"></span>
+      <span class="choice-need" data-i18n="welcome.chat.need"></span>
     </button>
     <button type="button" class="choice" data-usage="code">
-      <span class="choice-title">⌨️ Điều khiển từ Claude Code</span>
-      <span class="choice-text">Claude Code trong terminal thao tác trình duyệt, panel này hiện từng bước và hỏi bạn khi cần.</span>
-      <span class="choice-need">Không cần API key. Cần plugin browser-agent cho Claude Code.</span>
+      <span class="choice-title" data-i18n="welcome.code.title"></span>
+      <span class="choice-text" data-i18n="welcome.code.text"></span>
+      <span class="choice-need" data-i18n="welcome.code.need"></span>
     </button>
-    <button id="cancelWelcome" type="button" class="ghost" hidden>Giữ nguyên</button>
+    <button id="cancelWelcome" type="button" class="ghost" data-i18n="welcome.keep" hidden></button>
   </section>
 
   <form id="settings" hidden>
     <section class="group" data-for="chat">
-      <h2>Kết nối Claude API</h2>
-      <label>API key
+      <h2 data-i18n="set.chat.h"></h2>
+      <label><span data-i18n="set.apiKey"></span>
         <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-...">
-        <span class="note">Lưu không mã hóa trong hồ sơ Chrome này. Đừng dùng trên máy dùng chung.</span>
+        <span class="note" data-i18n="set.apiKey.note"></span>
       </label>
       <div class="field">
-        <span>Model</span>
+        <span data-i18n="set.model"></span>
         <div class="row">
           <select id="modelSelect" hidden></select>
           <input id="model" list="models" spellcheck="false">
-          <button id="refreshModels" type="button" class="ghost" title="Kiểm tra key và tải danh sách model được phép">Kiểm tra</button>
+          <button id="refreshModels" type="button" class="ghost" data-i18n="set.check" data-i18n-title="set.check.title"></button>
         </div>
         <datalist id="models">
           <option value="claude-sonnet-5-5"></option>
@@ -57,14 +62,14 @@
         </datalist>
         <span id="modelStatus" class="note"></span>
       </div>
-      <label class="check"><input id="useGateway" type="checkbox"> Dùng gateway công ty</label>
+      <label class="check"><input id="useGateway" type="checkbox"> <span data-i18n="set.gateway"></span></label>
       <div id="gatewayFields" class="sub" hidden>
-        <label>API base URL
-          <input id="baseUrl" type="url" spellcheck="false" placeholder="https://gateway.congty.vn/anthropic">
+        <label><span data-i18n="set.baseUrl"></span>
+          <input id="baseUrl" type="url" spellcheck="false" data-i18n-placeholder="set.baseUrl.ph">
         </label>
-        <label>Kiểu xác thực
+        <label><span data-i18n="set.auth"></span>
           <select id="authType">
-            <option value="x-api-key">x-api-key (như Anthropic)</option>
+            <option value="x-api-key" data-i18n="set.auth.key"></option>
             <option value="bearer">Authorization: Bearer</option>
           </select>
         </label>
@@ -72,76 +77,93 @@
     </section>
 
     <section class="group" data-for="code">
-      <h2>Kết nối Claude Code</h2>
-      <p class="note">Không cần cấu hình: mỗi terminal Claude Code có plugin browser-agent tự kết nối tới panel này.</p>
+      <h2 data-i18n="set.code.h"></h2>
+      <p class="note" data-i18n="set.code.note"></p>
+      <div class="field">
+        <span data-i18n="set.confirmIn"></span>
+        <div class="segmented" role="radiogroup" data-i18n-aria-label="set.confirmIn">
+          <label><input type="radio" name="confirmIn" value="terminal"><span data-i18n="set.confirmIn.terminal"></span></label>
+          <label><input type="radio" name="confirmIn" value="panel"><span data-i18n="set.confirmIn.panel"></span></label>
+        </div>
+        <span class="note" data-i18n="set.confirmIn.note"></span>
+      </div>
       <details id="bridgeAdvanced">
-        <summary>Nâng cao</summary>
-        <label>Cổng đầu
+        <summary data-i18n="set.advanced"></summary>
+        <label><span data-i18n="set.port"></span>
           <input id="bridgePort" type="number" min="1024" max="65526" placeholder="18765">
-          <span class="note">Mỗi phiên dùng một cổng trong 10 cổng từ đây. Đổi khi đặt BROWSER_AGENT_PORT cho Claude Code.</span>
+          <span class="note" data-i18n="set.port.note"></span>
         </label>
-        <label>Token
-          <input id="bridgeToken" type="password" autocomplete="off" spellcheck="false" placeholder="để trống nếu không đặt BROWSER_AGENT_TOKEN">
-          <span class="note">Chỉ cần trên máy có nhiều người dùng hệ điều hành.</span>
+        <label><span data-i18n="set.token"></span>
+          <input id="bridgeToken" type="password" autocomplete="off" spellcheck="false" data-i18n-placeholder="set.token.ph">
+          <span class="note" data-i18n="set.token.note"></span>
         </label>
       </details>
     </section>
 
     <section class="group">
-      <h2>Quyền</h2>
+      <h2 data-i18n="set.perm.h"></h2>
       <div class="field">
-        <span>Mức tự động</span>
-        <div class="segmented" role="radiogroup" aria-label="Mức tự động">
-          <label><input type="radio" name="mode" value="ask"><span>Hỏi mọi thao tác</span></label>
-          <label><input type="radio" name="mode" value="auto"><span>Chỉ hỏi thao tác nhạy cảm</span></label>
+        <span data-i18n="set.mode"></span>
+        <div class="segmented" role="radiogroup" data-i18n-aria-label="set.mode">
+          <label><input type="radio" name="mode" value="ask"><span data-i18n="set.mode.ask"></span></label>
+          <label><input type="radio" name="mode" value="auto"><span data-i18n="set.mode.auto"></span></label>
         </div>
-        <span class="note">Thao tác nhạy cảm (mua, xóa, gửi, ô mật khẩu…) luôn được hỏi. Việc nhận diện dựa trên từ khóa nên có thể bỏ sót.</span>
+        <span class="note" data-i18n="set.mode.note"></span>
       </div>
-      <label>Trang luôn được phép
-        <textarea id="hosts" rows="3" spellcheck="false" placeholder="example.com&#10;mỗi dòng một tên miền"></textarea>
+      <label><span data-i18n="set.hosts"></span>
+        <textarea id="hosts" rows="3" spellcheck="false" data-i18n-placeholder="set.hosts.ph"></textarea>
       </label>
       <details id="toolsBox">
-        <summary>Tool tùy chọn <span id="toolsCount" class="muted"></span></summary>
-        <label class="check"><input type="checkbox" data-tool="read_console"> Đọc console của trang</label>
-        <label class="check"><input type="checkbox" data-tool="read_network"> Đọc các request mạng</label>
-        <label class="check"><input type="checkbox" data-tool="file_upload"> Tải lên tệp bạn đính kèm (nút 📎)</label>
-        <label class="check"><input type="checkbox" data-tool="javascript_exec"> Chạy JavaScript trên trang</label>
-        <span class="note warn">JavaScript chạy với toàn quyền của trang, gồm cookie và tài khoản đang đăng nhập. Chỉ bật trong hồ sơ Chrome không đăng nhập tài khoản quan trọng.</span>
+        <summary><span data-i18n="set.tools"></span> <span id="toolsCount" class="muted"></span></summary>
+        <label class="check"><input type="checkbox" data-tool="read_console"> <span data-i18n="tool.read_console"></span></label>
+        <label class="check"><input type="checkbox" data-tool="read_network"> <span data-i18n="tool.read_network"></span></label>
+        <label class="check"><input type="checkbox" data-tool="file_upload"> <span data-i18n="tool.file_upload"></span></label>
+        <label class="check"><input type="checkbox" data-tool="javascript_exec"> <span data-i18n="tool.javascript_exec"></span></label>
+        <span class="note warn" data-i18n="set.tools.jsWarn"></span>
       </details>
     </section>
 
+    <section class="group">
+      <h2 data-i18n="set.lang.h"></h2>
+      <select id="language" aria-label="Language / Ngôn ngữ">
+        <option value="" data-i18n="set.lang.auto"></option>
+        <option value="en">English</option>
+        <option value="vi">Tiếng Việt</option>
+      </select>
+    </section>
+
     <div class="actions">
-      <button type="submit">Lưu</button>
-      <button id="closeSettings" type="button" class="ghost">Đóng</button>
+      <button type="submit" data-i18n="set.save"></button>
+      <button id="closeSettings" type="button" class="ghost" data-i18n="set.close"></button>
     </div>
   </form>
 
   <section id="sessions" data-for="code">
     <div id="sessionList"></div>
     <div id="setupGuide">
-      <strong>Chưa có phiên Claude Code nào</strong>
+      <strong data-i18n="guide.title"></strong>
       <ol>
-        <li>Trong Claude Code, cài plugin:
-          <div class="copy"><code>/plugin marketplace add nqh98/browser-agent-extension</code><button type="button" class="ghost" data-copy>Sao chép</button></div>
-          <div class="copy"><code>/plugin install browser-agent@browser-agent-extension</code><button type="button" class="ghost" data-copy>Sao chép</button></div>
+        <li><span data-i18n="guide.install"></span>
+          <div class="copy"><code>/plugin marketplace add nqh98/browser-agent-extension</code><button type="button" class="ghost" data-copy data-i18n="guide.copy"></button></div>
+          <div class="copy"><code>/plugin install browser-agent@browser-agent-extension</code><button type="button" class="ghost" data-copy data-i18n="guide.copy"></button></div>
         </li>
-        <li>Khởi động lại Claude Code.</li>
-        <li>Giữ panel này mở và giao việc cho Claude Code, ví dụ "mở example.com và tóm tắt trang".</li>
+        <li data-i18n="guide.restart"></li>
+        <li data-i18n="guide.ask"></li>
       </ol>
     </div>
     <span id="bridgeStatus" class="note"></span>
-    <button id="attachCode" type="button" class="ghost small" title="Tệp đính kèm hiện trong bridge_status với mã doc-N" hidden>📎 Đính kèm tệp cho Claude Code tải lên</button>
+    <button id="attachCode" type="button" class="ghost small" data-i18n="code.attach" data-i18n-title="code.attach.title" hidden></button>
   </section>
 
   <main id="log" aria-live="polite"></main>
 
   <div id="attachments" hidden></div>
   <form id="composer" data-for="chat">
-    <button id="attach" type="button" class="ghost" title="Đính kèm tệp để tác tử tải lên" hidden>📎</button>
+    <button id="attach" type="button" class="ghost" data-i18n-title="chat.attach.title" hidden>📎</button>
     <input id="files" type="file" multiple hidden>
-    <textarea id="prompt" rows="2" placeholder="Bạn muốn làm gì trên trang này?"></textarea>
-    <button id="send" type="submit">Gửi</button>
-    <button id="stop" type="button" class="danger" hidden>Dừng</button>
+    <textarea id="prompt" rows="2" data-i18n-placeholder="chat.placeholder"></textarea>
+    <button id="send" type="submit" data-i18n="chat.send"></button>
+    <button id="stop" type="button" class="danger" data-i18n="chat.stop" hidden></button>
   </form>
 
   <script type="module" src="sidepanel.js"></script>

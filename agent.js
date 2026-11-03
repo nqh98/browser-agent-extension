@@ -1,4 +1,5 @@
 // Messages API agent loop for the browser toolset.
+import { t } from './i18n.js';
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
 const NOT_EXECUTED = 'Not executed: an earlier action in this turn failed.';
 const MAX_TURNS = 50;
@@ -65,11 +66,8 @@ export function buildRequest(model, messages, tools) {
 
 function describeApiError(status, body) {
   const detail = body?.error?.message || `HTTP ${status}`;
-  if (status === 401) return `API key không hợp lệ (${detail}).`;
-  if (status === 403) return `API key không có quyền dùng model hoặc tính năng này (${detail}).`;
-  if (status === 404) return `Không tìm thấy model. Hãy kiểm tra tên model trong Cài đặt (${detail}).`;
-  if (status === 429) return `Đã vượt giới hạn tốc độ của API key (${detail}).`;
-  return `Lỗi API: ${detail}`;
+  if ([401, 403, 404, 429].includes(status)) return t(`api.${status}`, { detail });
+  return t('api.other', { detail });
 }
 
 /** Normalizes a user-entered base URL: empty means Anthropic; a trailing /v1 or slash is dropped. */
@@ -103,7 +101,7 @@ export async function listModels(settings, signal) {
     const response = await fetch(url, { signal, headers: apiHeaders(settings) });
     const body = await response.json().catch(() => null);
     if (!response.ok) {
-      if (response.status === 404) throw new Error('Gateway không hỗ trợ /v1/models. Hãy nhập tên model thủ công.');
+      if (response.status === 404) throw new Error(t('api.noModels'));
       throw new Error(describeApiError(response.status, body));
     }
     const data = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
@@ -179,11 +177,11 @@ export async function runTask({ text, messages, settings, executor, signal, ui }
         messages.push({ role: 'user', content: await runToolCalls(response.content, executor, ui) });
         continue;
       }
-      if (response.stop_reason === 'max_tokens') ui.onNotice?.('Câu trả lời bị cắt vì chạm giới hạn độ dài.');
-      if (response.stop_reason === 'refusal') ui.onNotice?.('Claude đã từ chối yêu cầu này.');
+      if (response.stop_reason === 'max_tokens') ui.onNotice?.(t('agent.maxTokens'));
+      if (response.stop_reason === 'refusal') ui.onNotice?.(t('agent.refusal'));
       return;
     }
-    ui.onNotice?.(`Đã dừng sau ${MAX_TURNS} lượt để tránh tốn chi phí. Gửi "tiếp tục" nếu muốn làm tiếp.`);
+    ui.onNotice?.(t('agent.maxTurns', { turns: MAX_TURNS }));
   } finally {
     await executor.endTask();
   }

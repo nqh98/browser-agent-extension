@@ -1,0 +1,5 @@
+{
+  "extName": { "message": "Browser Agent" },
+  "extDescription": { "message": "Side panel agent that reads and operates web pages, through your own Claude API key or Claude Code in the terminal. Unofficial; not affiliated with Anthropic." },
+  "actionTitle": { "message": "Open Browser Agent" }
+}
