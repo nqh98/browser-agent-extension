@@ -112,37 +112,54 @@ function upgradeStatus(headers) {
     chrome.tabs.query = async (q) => (q.active && q.currentWindow ? [await chrome.tabs.get(tabId)] : orig(q));
   }, targetId);
 
-  const status = () => panel.$eval('#bridgeStatus', (n) => n.textContent);
-  async function configure({ enabled = true, token = '', mode = 'ask', port = BRIDGE_PORT } = {}) {
+  const status = () => panel.$eval('#sessions', (n) => n.innerText.replace(/\s+/g, ' '));
+  async function setUsage(usage) {
+    if (await panel.$eval('#welcome', (n) => n.hidden)) await panel.click('#modeSwitch');
+    await panel.click(`#welcome [data-usage=${usage}]`);
+  }
+  async function configure({ token = '', mode = 'ask', port = BRIDGE_PORT } = {}) {
     if (await panel.$eval('#settings', (n) => n.hidden)) await panel.click('#toggleSettings');
-    await panel.selectOption('#mode', mode);
-    await panel.setChecked('#bridgeEnabled', enabled);
+    await panel.click(`.segmented input[value=${mode}] + span`);
+    await panel.$eval('#bridgeAdvanced', (d) => { d.open = true; });
     await panel.fill('#bridgePort', String(port));
     await panel.fill('#bridgeToken', token);
     await panel.click('#settings button[type=submit]');
   }
 
-  const waitStatus = (re) => panel.waitForFunction((source) => new RegExp(source).test(document.getElementById('bridgeStatus').textContent), re.source, { timeout: 10000 }).catch(() => {});
+  // First run: pick Claude Code. No API key or settings are needed.
+  check('first run asks how to use the extension', await panel.isVisible('#welcome') && !(await panel.isVisible('#apiKey')));
+  await panel.click('#modeSwitch');
+  check('mode button cannot dismiss the first-run choice', await panel.isVisible('#welcome'));
+  await setUsage('code');
+  const codeView = await panel.evaluate(() => ({
+    settings: document.getElementById('settings').hidden,
+    composer: getComputedStyle(document.getElementById('composer')).display,
+    guide: getComputedStyle(document.getElementById('setupGuide')).display,
+    label: document.getElementById('modeLabel').textContent,
+  }));
+  check('Claude Code mode: no composer, setup guide shown, settings closed', codeView.settings && codeView.composer === 'none' && codeView.guide !== 'none' && codeView.label === 'Claude Code', JSON.stringify(codeView));
+
+  const waitStatus = (re) => panel.waitForFunction((source) => new RegExp(source).test(document.getElementById('sessions').innerText.replace(/\s+/g, ' ')), re.source, { timeout: 10000 }).catch(() => {});
 
   // Optional token, for machines shared with other OS users.
   await configure({ port: TOKEN_PORT, token: 'wrong-token-wrong-token' });
-  await waitStatus(/Token không khớp/);
-  check('server with BROWSER_AGENT_TOKEN rejects a wrong token', /Token không khớp/.test(await status()), await status());
+  await waitStatus(/Cổng 18810: token không khớp/);
+  check('server with BROWSER_AGENT_TOKEN rejects a wrong token', /Cổng 18810: token không khớp/.test(await status()), await status());
   await configure({ port: TOKEN_PORT });
-  await waitStatus(/Token không khớp/);
-  check('server with BROWSER_AGENT_TOKEN rejects a missing token', /Token không khớp/.test(await status()), await status());
+  await waitStatus(/Cổng 18810: token không khớp/);
+  check('server with BROWSER_AGENT_TOKEN rejects a missing token', /Cổng 18810: token không khớp/.test(await status()), await status());
   await configure({ port: TOKEN_PORT, token: TOKEN });
-  await waitStatus(/Đã kết nối/);
-  check('server with BROWSER_AGENT_TOKEN accepts the right token', /Đã kết nối/.test(await status()), await status());
+  await waitStatus(/đang chờ · 0 tab/);
+  check('server with BROWSER_AGENT_TOKEN accepts the right token', /browser-agent-extension đang chờ/.test(await status()) && !/token không khớp/.test(await status()), await status());
   r = await tokenMcp.call('bridge_status');
   check('token server reports connected', /Extension: connected/.test(textOf(r)), textOf(r));
 
   // Default: no token, just tick the box.
   await configure();
-  await waitStatus(/Đã kết nối/);
-  await panel.waitForFunction(() => /Đã kết nối/.test(document.getElementById('bridgeStatus').textContent), null, { timeout: 10000 }).catch(() => {});
-  check('panel connects without a token by default', /Đã kết nối/.test(await status()), await status());
-  check('header badge shows connection', await panel.$eval('#bridgeBadge', (n) => !n.hidden && n.classList.contains('on')));
+  await waitStatus(/first-project đang chờ/);
+  check('panel connects without a token by default', /first-project đang chờ/.test(await status()) && await panel.$eval('#bridgeStatus', (n) => n.textContent) === '', await status());
+  check('header dot shows connection and the guide hides', await panel.$eval('#modeDot', (n) => n.classList.contains('on')) && !(await panel.isVisible('#setupGuide')));
+  check('session row lists the session, port in its tooltip', await panel.$eval('#sessionList [data-port="18790"]', (n) => /first-project/.test(n.textContent) && /cổng 18790/.test(n.title)));
   r = await mcp.call('bridge_status');
   check('bridge_status reports connected and mode', /Extension: connected/.test(textOf(r)) && /ask before each/.test(textOf(r)), textOf(r));
 
@@ -156,7 +173,8 @@ function upgradeStatus(headers) {
       if (card) {
         const title = await card.$eval('strong', (n) => n.textContent).catch(() => '');
         const detail = await card.$eval('.detail', (n) => n.textContent).catch(() => '');
-        prompts.push({ title, detail });
+        const tag = await card.$eval('.tag', (n) => n.textContent).catch(() => '');
+        prompts.push({ title, detail, tag });
         const choice = policy(title, detail);
         const button = await card.$(`button:text-is("${choice}")`) || await card.$('button:text-is("Từ chối")');
         await button?.click().catch(() => {});
@@ -166,7 +184,7 @@ function upgradeStatus(headers) {
   })();
 
   // ---- Tool calls through the bridge ----
-  policy = (title) => (title.includes('Cho phép tác tử dùng') ? 'Cho phép đến khi tạo chat mới' : 'Cho phép');
+  policy = (title) => (title.includes('Cho phép tác tử dùng') ? 'Cho phép đến khi phiên này kết thúc' : 'Cho phép');
   r = await mcp.call('read_page', { filter: 'interactive' });
   check('read_page works and asks for the site once', !r.isError && /Say hello/.test(textOf(r)) && prompts.filter((p) => p.title.includes(`127.0.0.1:${SITE_PORT}`)).length === 1, textOf(r).slice(0, 400) + JSON.stringify(prompts));
   check('results carry browser state as text', /Browser state: .*"tab_id":"tab-\d+"/.test(textOf(r)), textOf(r).slice(-300));
@@ -198,15 +216,16 @@ function upgradeStatus(headers) {
 
   const log = await panel.$$eval('#log > .action.remote', (ns) => ns.map((n) => n.textContent));
   check('panel logs Claude Code actions', log.some((l) => /Tìm "say hello"/.test(l)) && log.length >= 6, log.join(' | '));
-  check('panel composer locked while Claude Code drives', await panel.$eval('#send', (n) => n.hidden) && !(await panel.$eval('#stop', (n) => n.hidden)));
+  check('prompts are tagged with the session', prompts.length && prompts.every((p) => p.tag === 'first-project'), JSON.stringify(prompts));
 
   // ---- Stop button ----
   const waiting = mcp.call('wait', { duration: 20 });
   await new Promise((res) => setTimeout(res, 700));
-  await panel.click('#stop');
+  check('busy session row offers Stop', await panel.$eval('#sessionList [data-port="18790"]', (n) => n.classList.contains('busy') && !n.querySelector('button').disabled));
+  await panel.click('#sessionList [data-port="18790"] button');
   r = await waiting;
   check('Stop in the panel interrupts a running call', r.isError && /Stopped by the user/.test(textOf(r)), textOf(r));
-  check('composer unlocked after Stop', !(await panel.$eval('#send', (n) => n.hidden)));
+  check('session row idle after Stop', await panel.$eval('#sessionList [data-port="18790"]', (n) => !n.classList.contains('busy') && n.querySelector('button').disabled));
   r = await mcp.call('list_tabs');
   check('next call after Stop tells Claude to ask the user', r.isError && /pressed Stop/.test(textOf(r)), textOf(r));
   r = await mcp.call('list_tabs');
@@ -226,8 +245,8 @@ function upgradeStatus(headers) {
   r = await mcp2.call('bridge_status');
   check('second session takes the next free port', new RegExp(`127.0.0.1:${BRIDGE_PORT + 1}/bridge as session "second-project"`).test(textOf(r)), textOf(r));
   await waitStatus(/second-project/);
-  check('panel lists both sessions with their ports', /first-project \(cổng 18790\).*second-project \(cổng 18791\)/.test(await status()), await status());
-  check('badge counts sessions', await panel.$eval('#bridgeBadge', (n) => n.textContent) === 'Claude Code ×2');
+  check('panel lists both sessions with their ports', await panel.$$eval('#sessionList .session', (ns) => ns.map((n) => `${n.querySelector('.name').textContent}@${n.dataset.port}`).join(',')) === 'first-project@18790,second-project@18791', await status());
+  check('header counts sessions', await panel.$eval('#modeLabel', (n) => n.textContent) === 'Claude Code ×2' && (await panel.$$('#sessionList .session')).length === 2);
   r = await mcp2.call('list_tabs');
   r = await mcp2.call('get_page_text');
   check('second session cannot take the first session\'s tab', r.isError && /belongs to another Claude Code session/.test(textOf(r)) && /new_tab/.test(textOf(r)), textOf(r));
@@ -236,25 +255,34 @@ function upgradeStatus(headers) {
   const windows = await panel.evaluate(async ([a, b]) => [(await chrome.tabs.get(a)).windowId, (await chrome.tabs.get(b)).windowId], [targetId, tab2]);
   check('second session opens its tab in its own window', tab2 && windows[0] !== windows[1], JSON.stringify({ text: textOf(r), windows }));
   prompts.length = 0;
-  policy = (title) => (title.includes('Cho phép tác tử dùng') ? 'Cho phép đến khi tạo chat mới' : 'Cho phép');
+  policy = (title) => (title.includes('Cho phép tác tử dùng') ? 'Cho phép đến khi phiên này kết thúc' : 'Cho phép');
   r = await mcp2.call('navigate', { url: `${BASE}/page2` });
-  check('each session asks for sites on its own, labeled', !r.isError && prompts.some((p) => p.title.startsWith('[second-project]') && p.title.includes(`127.0.0.1:${SITE_PORT}`)), textOf(r) + JSON.stringify(prompts));
+  check('each session asks for sites on its own, labeled', !r.isError && prompts.some((p) => p.tag === 'second-project' && p.title.includes(`127.0.0.1:${SITE_PORT}`)), textOf(r) + JSON.stringify(prompts));
   const [t1, t2] = await Promise.all([mcp.call('get_page_text'), mcp2.call('get_page_text')]);
   check('sessions work in parallel on their own tabs', /Welcome to the test shop/.test(textOf(t1)) && /Page Two/.test(textOf(t2)) && !/Welcome to the test shop/.test(textOf(t2)), textOf(t1).slice(0, 100) + ' | ' + textOf(t2).slice(0, 100));
   const labels = await panel.$$eval('#log > .action.remote', (ns) => [...new Set(ns.map((n) => n.dataset.session))]);
-  check('panel log labels each session', labels.includes('Claude Code (first-project)') && labels.includes('Claude Code (second-project)'), JSON.stringify(labels));
+  check('panel log labels each session', labels.includes('first-project') && labels.includes('second-project'), JSON.stringify(labels));
   mcp2.child.kill();
-  await panel.waitForFunction(() => !/second-project/.test(document.getElementById('bridgeStatus').textContent), null, { timeout: 10000 }).catch(() => {});
-  check('closing a terminal removes its session', !/second-project/.test(await status()) && await panel.$eval('#bridgeBadge', (n) => n.textContent) === 'Claude Code', await status());
+  await panel.waitForFunction(() => !/second-project/.test(document.getElementById('sessions').textContent), null, { timeout: 10000 }).catch(() => {});
+  check('closing a terminal removes its session', !/second-project/.test(await status()) && await panel.$eval('#modeLabel', (n) => n.textContent) === 'Claude Code', await status());
   r = await mcp.call('list_tabs');
   check('first session unaffected', !r.isError && new RegExp(`tab-${targetId}`).test(textOf(r)), textOf(r));
 
-  // ---- Disconnect ----
-  await configure({ enabled: false });
+  // ---- Switching to chat disconnects Claude Code (the modes are exclusive) ----
+  await setUsage('chat');
   await new Promise((res) => setTimeout(res, 300));
   r = await mcp.call('list_tabs');
-  check('disabling the bridge disconnects', r.isError && /not connected/.test(textOf(r)), textOf(r));
-  check('badge hidden when disabled', await panel.$eval('#bridgeBadge', (n) => n.hidden));
+  check('switching to chat disconnects Claude Code', r.isError && /not connected/.test(textOf(r)), textOf(r));
+  const chatView = await panel.evaluate(() => ({
+    sessions: getComputedStyle(document.getElementById('sessions')).display,
+    composer: getComputedStyle(document.getElementById('composer')).display,
+    label: document.getElementById('modeLabel').textContent,
+    apiKeyShown: !document.getElementById('settings').hidden,
+  }));
+  check('chat view: composer shown, sessions hidden, asks for API key', chatView.sessions === 'none' && chatView.composer !== 'none' && chatView.label === 'Chat' && chatView.apiKeyShown, JSON.stringify(chatView));
+  await setUsage('code');
+  await waitStatus(/first-project/);
+  check('switching back reconnects', /first-project/.test(await status()), await status());
 
   answering = false;
   const failed = results.filter((x) => !x.ok);

@@ -125,7 +125,7 @@ const DEFS = {
     inputSchema: schema(),
   },
   file_upload: {
-    description: 'Upload files the user attached in the side panel (document ids like "doc-1") to a file input. Optional; always asks the user.',
+    description: 'Upload files the user attached in the side panel (document ids like "doc-1"; bridge_status lists them) to a file input. Optional; always asks the user.',
     inputSchema: schema({ target: refTarget, document_ids: { type: 'array', items: { type: 'string' }, minItems: 1 } }, ['target', 'document_ids']),
   },
   javascript_exec: {

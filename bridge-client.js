@@ -75,11 +75,11 @@ export class BridgeClient {
       if (this.ws !== ws) return;
       this.ws = null;
       if (event.code === 4003) {
-        this.onState('error', 'Token không khớp với BROWSER_AGENT_TOKEN của Claude Code.');
+        this.onState('error', 'token không khớp với BROWSER_AGENT_TOKEN của phiên Claude Code này (hoặc phiên đó đang chạy bản plugin cũ, hãy khởi động lại nó).');
         return; // a wrong token will not fix itself
       }
       if (event.code === 4000) {
-        this.onState('error', 'Một side panel khác đã kết nối tới Claude Code.');
+        this.onState('error', 'một side panel khác đã kết nối tới phiên này.');
         return;
       }
       this.scheduleRetry(welcomed ? 'Mất kết nối tới Claude Code.' : 'Chưa thấy Claude Code đang chạy.');

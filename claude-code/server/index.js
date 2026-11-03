@@ -65,7 +65,7 @@ http.on('upgrade', (request, socket) => {
       authed = true;
       if (peer && peer !== ws) peer.close(4000, 'Replaced by a new connection');
       peer = ws;
-      peerInfo = { extension: message.extension || '', mode: message.mode || '', tools: message.tools || {} };
+      peerInfo = { extension: message.extension || '', mode: message.mode || '', tools: message.tools || {}, documents: message.documents || [] };
       ws.send(JSON.stringify({ type: 'welcome', server: VERSION, label: LABEL, port }));
       log('extension connected');
       return undefined;
@@ -76,7 +76,7 @@ http.on('upgrade', (request, socket) => {
       pending.delete(message.id);
       resolve(message.result);
     } else if (message.type === 'status') {
-      peerInfo = { ...peerInfo, mode: message.mode ?? peerInfo.mode, tools: message.tools ?? peerInfo.tools };
+      peerInfo = { ...peerInfo, mode: message.mode ?? peerInfo.mode, tools: message.tools ?? peerInfo.tools, documents: message.documents ?? peerInfo.documents };
     }
     return undefined;
   });
@@ -160,6 +160,8 @@ async function status() {
     lines.push(`Permission mode: ${peerInfo.mode === 'auto' ? 'auto (asks only for sensitive actions)' : 'ask before each page-changing action'}`);
     const enabled = Object.entries(peerInfo.tools || {}).filter(([, on]) => on).map(([tool]) => tool);
     lines.push(`Optional tools enabled: ${enabled.join(', ') || 'none'}`);
+    const documents = (peerInfo.documents || []).map((d) => `${d.id}: ${String(d.name).slice(0, 200)} (${d.type || 'unknown type'}, ${d.size} bytes)`);
+    if (peerInfo.tools?.file_upload) lines.push(`Files the user attached for file_upload: ${documents.join('; ') || 'none yet (the user can attach files with the 📎 button in the side panel)'}`);
   } else if (bound) {
     lines.push(setupHelp());
   }

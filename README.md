@@ -8,13 +8,19 @@ Extension Chrome không chính thức. Tác tử chạy trong side panel, đọc
 2. Mở `chrome://extensions` và bật **Developer mode**.
 3. Chọn **Load unpacked**, rồi chọn thư mục đã giải nén. ID của extension luôn là `eboigejnblbcifgbpgaadonkpgbdbnkc`; nếu trước đó bạn đã nạp bản cũ (ID khác), hãy gỡ bản cũ đi và nhập lại cài đặt.
 4. Bấm biểu tượng extension để mở side panel.
-5. Nhập API key, chọn model và bấm **Lưu**.
+5. Chọn cách dùng:
+   - **Chat trong panel**: giao việc ngay trong panel. Nhập API key, bấm **Kiểm tra** để xác nhận key và chọn model, rồi **Lưu**.
+   - **Điều khiển từ Claude Code**: Claude Code trong terminal thao tác trình duyệt, không cần API key (xem mục bên dưới).
+
+Hai cách dùng loại trừ nhau. Đổi bằng nút chế độ ở góc trên bên trái; khi đổi, mọi việc của chế độ cũ đều dừng. Chấm xanh cạnh tên chế độ nghĩa là đã sẵn sàng: có API key, hoặc có ít nhất một phiên Claude Code đã kết nối.
 
 ## Dùng qua gateway của công ty
 
+Ở chế độ Chat, mở **Cài đặt** và tick **Dùng gateway công ty**:
+
 - **API base URL**: địa chỉ gateway, ví dụ `https://llm-gateway.congty.vn/anthropic`. Có hay không có `/v1` ở cuối đều được. Để trống thì dùng `https://api.anthropic.com`.
 - **Kiểu xác thực**: `x-api-key` cho Anthropic, hoặc `Authorization: Bearer` nếu gateway yêu cầu.
-- **Model**: bấm **Tải** để lấy danh sách model mà key hoặc gateway cho phép, qua `GET /v1/models` (định dạng Anthropic có phân trang, hoặc dạng `{ data: [{ id }] }`). Danh sách cũng tự tải lại sau khi bạn lưu base URL, kiểu xác thực hoặc key mới, và được lưu lại cho lần mở sau. Chọn **Nhập tên khác…** để gõ tên model không có trong danh sách. Nếu gateway không có `/v1/models`, bạn nhập tên model thủ công.
+- **Model**: bấm **Kiểm tra** để lấy danh sách model mà key hoặc gateway cho phép, qua `GET /v1/models` (định dạng Anthropic có phân trang, hoặc dạng `{ data: [{ id }] }`). Danh sách cũng tự tải lại sau khi bạn lưu base URL, kiểu xác thực hoặc key mới, và được lưu lại cho lần mở sau. Chọn **Nhập tên khác…** để gõ tên model không có trong danh sách. Nếu gateway không có `/v1/models`, bạn nhập tên model thủ công.
 - Gateway phải hỗ trợ Messages API (`/v1/messages`) và chuyển tiếp nguyên tool `browser_toolset_20260801` cùng các trường `toolset_name` và `browser_state`.
 
 Chrome sẽ hiện thanh thông báo "đang gỡ lỗi trình duyệt" khi tác tử điều khiển tab. Nếu bạn tắt thanh này, tác vụ sẽ dừng.
@@ -38,14 +44,15 @@ Claude Code (terminal 2) ──stdio──▶ MCP server :18766 ──┼─WebS
 
    Hoặc không dùng plugin: `claude mcp add browser-agent -- node /đường/dẫn/tới/browser-agent-extension/claude-code/server/index.js`.
 2. Khởi động lại Claude Code.
-3. Trong side panel, mở **Cài đặt → Claude Code**, tick **Cho phép Claude Code…** rồi bấm **Lưu**. Header của panel hiện nhãn **Claude Code** khi đã kết nối (**Claude Code ×2** khi có hai phiên).
+3. Trong side panel, chọn **Điều khiển từ Claude Code**. Panel tự kết nối; mỗi phiên hiện thành một hàng có màu riêng, trạng thái, số tab và nút **Dừng**. Header hiện **Claude Code ×2** khi có hai phiên.
 4. Giữ side panel mở, rồi bảo Claude Code làm việc trên trình duyệt, ví dụ "mở example.com và tóm tắt trang". Claude Code có thể gọi tool `bridge_status` để kiểm tra kết nối.
 
 Cách hoạt động:
 
 - Các tool `mcp__browser-agent__*` (`navigate`, `read_page`, `find`, `left_click`, `form_input`, `screenshot`…) ứng với các member tool của extension và có cùng tham số.
 - Quyền theo tên miền, chế độ hỏi trước, phát hiện thao tác nhạy cảm và tool tùy chọn vẫn áp dụng như khi chạy trong panel. Hộp xác nhận hiện trong panel, Claude Code chờ tới khi bạn trả lời (tối đa 10 phút).
-- Mỗi thao tác được ghi trong panel với nhãn "Claude Code". Trong lúc Claude Code điều khiển, ô chat của panel bị khóa. Nút **Dừng** cắt thao tác đang chạy, và lần gọi kế tiếp báo cho Claude Code rằng bạn đã dừng.
+- Mỗi thao tác được ghi trong panel kèm tên phiên. Nút **Dừng** trên hàng của phiên cắt thao tác đang chạy của phiên đó, và lần gọi kế tiếp báo cho Claude Code rằng bạn đã dừng.
+- Muốn Claude Code tải tệp lên trang, bật **Tải lên tệp** trong Tool tùy chọn rồi bấm **📎 Đính kèm tệp**. Tool `bridge_status` liệt kê các tệp này theo mã `doc-N`.
 - Sau 3 phút Claude Code không gọi tool, extension thả quyền điều khiển tab và thanh "đang gỡ lỗi" biến mất.
 - An toàn: server chỉ nghe trên `127.0.0.1` và chỉ nhận kết nối có origin đúng ID của extension này (`chrome-extension://eboigejnblbcifgbpgaadonkpgbdbnkc`, cố định nhờ `key` trong `manifest.json`). Trình duyệt tự đặt origin nên trang web và extension khác không giả được. Trên máy có nhiều người dùng hệ điều hành, đặt thêm biến `BROWSER_AGENT_TOKEN` cho Claude Code và nhập cùng giá trị vào ô Token trong panel. Nếu đóng gói lại extension với key khác, đặt `BROWSER_AGENT_EXTENSION_ID` cho server.
 
@@ -54,7 +61,7 @@ Nhiều terminal cùng lúc:
 - Mỗi phiên Claude Code tự lấy cổng trống đầu tiên trong `18765`–`18774`, panel kết nối tới cả 10 cổng. Tối đa 10 phiên song song. Đổi khoảng cổng bằng biến `BROWSER_AGENT_PORT` (cổng đầu) và ô **Cổng đầu** trong panel.
 - Mỗi phiên được gắn nhãn theo tên thư mục nơi chạy Claude Code (đổi bằng `BROWSER_AGENT_LABEL`). Nhãn hiện trong trạng thái kết nối, trong nhật ký thao tác và trong hộp xác nhận, ví dụ `[my-project] Cho phép tác tử dùng example.com?`.
 - Mỗi phiên có tab, quyền tên miền và trạng thái riêng. Tab đang mở thuộc về phiên đầu tiên dùng nó; phiên khác gọi `new_tab` sẽ được mở trong cửa sổ riêng, để các phiên không phải tranh nhau tab đang hiển thị khi chụp màn hình.
-- Nút **Dừng** dừng mọi phiên đang chạy. Đóng một terminal chỉ ngắt phiên của terminal đó.
+- Đóng một terminal chỉ ngắt phiên của terminal đó. Cổng và token nằm trong **Cài đặt → Nâng cao**, chỉ cần khi đổi `BROWSER_AGENT_PORT` hoặc đặt `BROWSER_AGENT_TOKEN`.
 
 ## Quyền và an toàn
 
