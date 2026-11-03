@@ -93,6 +93,8 @@ header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border
 /* ---- Welcome ---- */
 #welcome { flex: 1; overflow-y: auto; display: grid; align-content: start; gap: 10px; padding: 20px 16px; }
 #welcome h1 { font-size: 17px; margin: 0; }
+.lang-switch { display: flex; gap: 6px; justify-content: flex-end; }
+.lang-switch button.current { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 #welcome p { margin: 0 0 4px; }
 .choice {
   display: grid; gap: 3px; text-align: left;
@@ -144,6 +146,7 @@ details > :not(summary) + :not(summary) { margin-top: 8px; }
 .session .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
 .session .meta { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
 .session button { flex: none; }
+.session .outdated { color: var(--warn); font-weight: 600; }
 .session.busy .meta::before { content: "● "; color: var(--ok); }
 #setupGuide { display: grid; gap: 6px; font-size: 13px; }
 #setupGuide ol { margin: 0; padding-left: 18px; display: grid; gap: 6px; }

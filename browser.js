@@ -1,6 +1,7 @@
 // Executor for the Claude API browser toolset (browser_toolset_20260801).
 import { modifierMask, parseKeySequence } from './keys.js';
 import { ActivityLog, redactUrl } from './capture.js';
+import { t } from './i18n.js';
 
 const MAX_IMAGE_EDGE = 1456;
 const MAX_TEXT = 50000;
@@ -414,8 +415,8 @@ export class BrowserExecutor {
     if (this.approved.has(host)) return;
     const answer = await this.confirm({
       kind: 'site',
-      title: `Cho phép tác tử dùng ${host}?`,
-      detail: 'Nội dung trang này sẽ được gửi tới Claude API và tác tử có thể thao tác trên đó.',
+      title: t('prompt.site.title', { host }),
+      detail: t('prompt.site.detail'),
     });
     if (answer === 'deny') throw new Error(`The user did not allow access to ${host}. Do not retry this site unless the user asks.`);
     this.approved.add(host);
@@ -432,7 +433,7 @@ export class BrowserExecutor {
 
   async gate(name, input, tabId) {
     if (!WRITE_MEMBERS.has(name)) return;
-    const info = await this.describeAction(name, input, tabId).catch(() => ({ label: 'phần tử không xác định' }));
+    const info = await this.describeAction(name, input, tabId).catch(() => ({ label: t('target.unknown') }));
     const haystack = `${info.label} ${info.submitLabel || ''}`;
     const isEnter = name === 'key' && /\benter\b|\breturn\b/i.test(String(input.text));
     const sensitive = Boolean(
@@ -448,7 +449,7 @@ export class BrowserExecutor {
     const answer = await this.confirm({
       kind: 'action',
       sensitive,
-      title: sensitive ? 'Thao tác nhạy cảm, cần bạn xác nhận' : 'Cho phép thao tác này?',
+      title: t(sensitive ? 'prompt.sensitive' : 'prompt.action'),
       detail: this.describeForUser(name, input, info),
     });
     if (answer === 'deny') throw new Error('The user declined this action. Ask the user how to proceed rather than retrying.');
@@ -475,7 +476,7 @@ export class BrowserExecutor {
       const child = tree.childOf(frame, info.frame);
       if (!child) return info;
       if (!(await this.frameAllowed(child, tree, false))) {
-        return { label: `nội dung trong khung nhúng từ ${hostOf(child.url) || 'trang khác'}`, secret: false, foreignFrame: true };
+        return { label: t('target.frame', { host: hostOf(child.url) || t('target.otherSite') }), secret: false, foreignFrame: true };
       }
       frame = child;
       info = await this.page(tabId, method, argsFor(info), frame);
@@ -485,17 +486,17 @@ export class BrowserExecutor {
 
   describeForUser(name, input, info) {
     if (name === 'type') {
-      return `Nhập vào ${info.label}: ${info.secret ? '[ẩn]' : `"${String(input.text).slice(0, 200)}"`}`;
+      return t('confirm.type', { label: info.label, text: info.secret ? t('hidden') : `"${String(input.text).slice(0, 200)}"` });
     }
-    if (name === 'key' || name === 'hold_key') return `Nhấn phím ${input.text} tại ${info.label}`;
-    if (name === 'form_input') return `Đặt ${info.label} = ${info.secret ? '[ẩn]' : `"${String(input.value).slice(0, 200)}"`}`;
-    if (name === 'close_tab') return `Đóng ${info.label}`;
-    if (name === 'javascript_exec') return `Chạy JavaScript trên trang:\n${String(input.text).slice(0, 1500)}`;
+    if (name === 'key' || name === 'hold_key') return t('confirm.key', { keys: input.text, label: info.label });
+    if (name === 'form_input') return t('confirm.form', { label: info.label, value: info.secret ? t('hidden') : `"${String(input.value).slice(0, 200)}"` });
+    if (name === 'close_tab') return t('confirm.close', { label: info.label });
+    if (name === 'javascript_exec') return t('confirm.js', { code: String(input.text).slice(0, 1500) });
     if (name === 'file_upload') {
       const names = (input.document_ids || []).map((id) => this.documents.get(String(id))?.name || id);
-      return `Tải lên ${names.join(', ') || '(không có tệp)'} vào ${info.label}`;
+      return t('confirm.upload', { files: names.join(', ') || t('confirm.noFiles'), label: info.label });
     }
-    return `${name} trên ${info.label}`;
+    return t('confirm.other', { name, label: info.label });
   }
 
   // ---- Chrome plumbing ----
@@ -623,8 +624,8 @@ export class BrowserExecutor {
       if (!ask || this.deniedFrameHosts.has(host)) return false;
       const answer = await this.confirm({
         kind: 'site',
-        title: `Cho phép tác tử đọc khung nhúng từ ${host}?`,
-        detail: 'Trang này nhúng nội dung từ một trang khác. Nội dung trong khung sẽ được gửi tới Claude API và tác tử có thể thao tác trong đó.',
+        title: t('prompt.frame.title', { host }),
+        detail: t('prompt.frame.detail'),
       });
       if (answer === 'deny') {
         this.deniedFrameHosts.add(host);

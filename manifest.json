@@ -1,13 +1,29 @@
 {
   "manifest_version": 3,
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmlgJeDJcBX5WlA3QBUCuQN2Ug7UsUOcQ6Y+EXV0rIRgSOyFr2YAt9UC6P4F2rGY85CvqonCvFQF4xcjJBVMGAcNigz6SVcvbdV+g3w/qIpeT/2k00jxjYwAS4PXxF5+K8f18PXCuYqeyVTL5r4sr2VUinyeDWDwaZ8kdKhESdpF7fitK571yYN7AcQoTWd+R3PrisSvyUe6VayVXE2aPu0PtUO3/dDQbeh61eYStK8hniErWE8y1jgEgUAr7tTv5tfWi6Nb2mSWZ2ux7i6VOTS5GwgNg9HE7xN7eC9xJDWP+cOH1MRdKtxAvbKUiirEvknUMrVilpD8KRmHyA4RTCQIDAQAB",
-  "name": "Browser Agent (API key)",
+  "name": "__MSG_extName__",
   "version": "0.2.0",
-  "description": "Side panel agent that reads and operates web pages through your own Claude API key. Unofficial; not affiliated with Anthropic.",
+  "description": "__MSG_extDescription__",
+  "default_locale": "en",
   "minimum_chrome_version": "116",
-  "permissions": ["sidePanel", "debugger", "tabs", "storage", "scripting", "downloads"],
-  "host_permissions": ["<all_urls>"],
-  "background": { "service_worker": "background.js" },
-  "side_panel": { "default_path": "sidepanel.html" },
-  "action": { "default_title": "Open Browser Agent" }
+  "permissions": [
+    "sidePanel",
+    "debugger",
+    "tabs",
+    "storage",
+    "scripting",
+    "downloads"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "__MSG_actionTitle__"
+  }
 }

@@ -11,7 +11,7 @@ The `mcp__browser-agent__*` tools run inside the user's real Chrome through the 
 
 - Call `bridge_status` if you are unsure the extension is connected. If it is not, relay the setup steps it returns and wait for the user; do not keep retrying.
 - Other Claude Code sessions may be driving the same Chrome. If a tool says the active tab belongs to another session, call `new_tab` (it opens in a window of your own) instead of touching that tab.
-- The first time you touch a site, the user must allow it in the panel. Tell the user to check the side panel if a call seems to hang.
+- The first time you touch a site, and before page-changing actions in "ask" mode, the user is asked to confirm: in this terminal (Accept/Decline) and in the side panel at once. A call waits until they answer; do not retry it meanwhile.
 
 ## Working on a page
 

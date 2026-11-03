@@ -1,6 +1,7 @@
 import { runTask, listModels, apiBase } from './agent.js';
 import { BrowserExecutor } from './browser.js';
 import { BridgeClient } from './bridge-client.js';
+import { t, setLanguage, language, translatePage } from './i18n.js';
 
 const $ = (id) => document.getElementById(id);
 const DEFAULTS = {
@@ -13,12 +14,10 @@ const DEFAULTS = {
   approvedHosts: [],
   tools: {},
   bridge: { port: 18765, token: '' },
+  confirmIn: 'terminal', // Claude Code mode: 'terminal' (and panel) or 'panel' only
+  lang: '', // '' follows the browser; 'en' or 'vi'
 };
 const USAGE_LABEL = { chat: 'Chat', code: 'Claude Code' };
-const HINT = {
-  chat: 'Giao việc cho tác tử trên tab đang mở, ví dụ: "Tóm tắt trang này" hoặc "Tìm chuyến bay rẻ nhất tới Đà Nẵng".',
-  code: 'Các thao tác của Claude Code sẽ hiện ở đây. Khi cần bạn đồng ý, panel sẽ hỏi tại đây.',
-};
 const REMOTE_IDLE_MS = 3 * 60 * 1000;
 const MAX_ATTACH_BYTES = 25 * 1024 * 1024;
 const BRIDGE_PORTS = 10;
@@ -40,7 +39,7 @@ function showHint() {
   if ($('log').children.length || !settings.usage) return;
   const hint = document.createElement('p');
   hint.className = 'muted hint';
-  hint.textContent = HINT[settings.usage];
+  hint.textContent = t(`hint.${settings.usage}`);
   $('log').append(hint);
 }
 
@@ -68,27 +67,18 @@ function hueOf(label) {
 
 function describeAction(name, input = {}) {
   const target = input.target?.ref || (input.target ? `(${input.target.x}, ${input.target.y})` : '');
-  const parts = {
-    navigate: `Mở ${input.url}`,
-    read_page: 'Đọc cấu trúc trang',
-    get_page_text: 'Đọc nội dung trang',
-    find: `Tìm "${input.query}"`,
-    screenshot: 'Chụp màn hình',
-    zoom: 'Phóng to một vùng',
-    type: 'Nhập văn bản',
-    key: `Nhấn ${input.text}`,
-    wait: `Chờ ${input.duration} giây`,
-    form_input: `Điền ${target}`,
-    new_tab: 'Mở tab mới',
-    switch_tab: `Chuyển sang ${input.tab_id}`,
-    close_tab: `Đóng ${input.tab_id}`,
-    list_tabs: 'Xem danh sách tab',
-    read_console: 'Đọc console',
-    read_network: 'Đọc request mạng',
-    file_upload: `Tải lên ${(input.document_ids || []).map((id) => attachments.get(String(id))?.name || id).join(', ')}`,
-    javascript_exec: 'Chạy JavaScript',
+  const params = {
+    url: input.url,
+    query: input.query,
+    keys: input.text,
+    seconds: input.duration,
+    target,
+    tab: input.tab_id,
+    files: (input.document_ids || []).map((id) => attachments.get(String(id))?.name || id).join(', '),
   };
-  return parts[name] || `${name} ${target}`.trim();
+  const key = `act.${name}`;
+  const text = t(key, params);
+  return text !== key ? text : `${name} ${target}`.trim();
 }
 
 function logAction(name, input, session = null) {
@@ -105,54 +95,90 @@ function logAction(name, input, session = null) {
   }
 }
 
-function askUser({ title, detail, kind, sensitive, session = null }) {
-  return new Promise((resolve) => {
-    const card = document.createElement('div');
-    card.className = `card${sensitive ? ' sensitive' : ''}`;
-    if (session) {
-      const tag = document.createElement('span');
-      tag.className = 'tag';
-      tag.textContent = session.label;
-      card.style.setProperty('--hue', hueOf(session.label));
-      card.append(tag);
-    }
-    const heading = document.createElement('strong');
-    heading.textContent = title;
-    const body = document.createElement('div');
-    body.className = 'detail';
-    body.textContent = detail;
-    const buttons = document.createElement('div');
-    buttons.className = 'buttons';
+/** The answers a prompt offers, as [value, label]; the same list goes to the terminal. */
+function promptOptions({ kind, sensitive, session }) {
+  if (kind === 'site') return [['allow', t(session ? 'prompt.allowSession' : 'prompt.allowChat')], ['always', t('prompt.always')], ['deny', t('prompt.deny')]];
+  if (sensitive) return [['allow', t('prompt.allow')], ['deny', t('prompt.deny')]];
+  return [['allow', t('prompt.allow')], ['allow_all', t('prompt.allowTask')], ['deny', t('prompt.deny')]];
+}
 
-    const entry = { session };
-    const finish = (answer) => {
-      pendingConfirms.delete(entry);
-      card.remove();
-      showHint();
-      resolve(answer);
-    };
-    entry.cancel = () => finish('deny');
-    pendingConfirms.add(entry);
+/**
+ * Shows a prompt card in the log. Returns { answer, close, setNote }: answer resolves
+ * with the chosen value; close(value) settles it from elsewhere (e.g. the terminal).
+ */
+function showPrompt({ title, detail, kind, sensitive, session = null, note = '' }) {
+  const card = document.createElement('div');
+  card.className = `card${sensitive ? ' sensitive' : ''}`;
+  if (session) {
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = session.label;
+    card.style.setProperty('--hue', hueOf(session.label));
+    card.append(tag);
+  }
+  const heading = document.createElement('strong');
+  heading.textContent = title;
+  const body = document.createElement('div');
+  body.className = 'detail';
+  body.textContent = detail;
+  const notice = document.createElement('span');
+  notice.className = 'note';
+  notice.textContent = note;
+  const buttons = document.createElement('div');
+  buttons.className = 'buttons';
 
-    const until = session ? 'đến khi phiên này kết thúc' : 'đến khi tạo chat mới';
-    const options = kind === 'site'
-      ? [['allow', `Cho phép ${until}`], ['always', 'Luôn cho phép'], ['deny', 'Từ chối']]
-      : sensitive
-        ? [['allow', 'Cho phép'], ['deny', 'Từ chối']]
-        : [['allow', 'Cho phép'], ['allow_all', 'Cho phép đến hết tác vụ'], ['deny', 'Từ chối']];
-    for (const [value, label] of options) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = label;
-      if (value !== 'allow') button.className = 'ghost';
-      button.addEventListener('click', () => finish(value));
-      buttons.append(button);
-    }
-    card.append(heading, body, buttons);
-    $('log').querySelector('.hint')?.remove();
-    $('log').append(card);
-    card.scrollIntoView({ block: 'end' });
+  let resolve;
+  const answer = new Promise((done) => { resolve = done; });
+  const entry = { session };
+  let settled = false;
+  const finish = (value) => {
+    if (settled) return;
+    settled = true;
+    pendingConfirms.delete(entry);
+    card.remove();
+    showHint();
+    resolve(value);
+  };
+  entry.cancel = () => finish('deny');
+  pendingConfirms.add(entry);
+
+  for (const [value, label] of promptOptions({ kind, sensitive, session })) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    if (value !== 'allow') button.className = 'ghost';
+    button.addEventListener('click', () => finish(value));
+    buttons.append(button);
+  }
+  card.append(heading, body, notice, buttons);
+  $('log').querySelector('.hint')?.remove();
+  $('log').append(card);
+  card.scrollIntoView({ block: 'end' });
+  return { answer, close: finish, setNote: (text) => { notice.textContent = text; } };
+}
+
+function askUser(request) {
+  return showPrompt(request).answer;
+}
+
+/**
+ * Claude Code sessions ask in the terminal and in the panel at once; the first
+ * answer wins and the other question is withdrawn.
+ */
+async function askForSession(session, request) {
+  const options = promptOptions({ ...request, session });
+  if (settings.confirmIn === 'panel' || !session.client.terminalConfirm) {
+    return askUser({ ...request, session });
+  }
+  const prompt = showPrompt({ ...request, session, note: t('prompt.inTerminal') });
+  const terminal = session.client.confirm({ ...request, session: session.label, options });
+  terminal.answer.then((answer) => {
+    if (answer) prompt.close(answer);
+    else prompt.setNote(t('prompt.noTerminal'));
   });
+  const answer = await prompt.answer;
+  session.client.cancelConfirm(terminal.id); // no-op when the terminal answered
+  return answer;
 }
 
 /** Denies open prompts: all of them, or only those of one session (null = the chat). */
@@ -213,7 +239,7 @@ function renderModels(models, current) {
   };
   for (const model of models) add(model.id, model.name && model.name !== model.id ? `${model.name} (${model.id})` : model.id);
   const known = models.some((model) => model.id === current);
-  add(CUSTOM_MODEL, 'Nhập tên khác…');
+  add(CUSTOM_MODEL, t('model.custom'));
   select.value = known ? current : current ? CUSTOM_MODEL : models[0].id;
   select.hidden = false;
   $('model').value = known ? '' : current;
@@ -235,7 +261,7 @@ function formConnection() {
 async function refreshModels() {
   const connection = formConnection();
   if (!connection.apiKey) {
-    $('modelStatus').textContent = 'Nhập API key để kiểm tra.';
+    $('modelStatus').textContent = t('model.needKey');
     return;
   }
   modelLoad?.abort();
@@ -243,22 +269,22 @@ async function refreshModels() {
   modelLoad = load;
   const current = chosenModel();
   $('refreshModels').disabled = true;
-  $('modelStatus').textContent = 'Đang kiểm tra…';
+  $('modelStatus').textContent = t('model.checking');
   try {
     const models = await listModels(connection, load.signal);
     if (load.signal.aborted) return;
     modelList = models;
     renderModels(models, current);
     $('modelStatus').textContent = models.length
-      ? `✓ Key dùng được. ${models.length} model được phép tại ${apiBase(connection.baseUrl)}.`
-      : 'Gateway không trả về model nào. Hãy nhập tên model thủ công.';
+      ? t('model.ok', { count: models.length, base: apiBase(connection.baseUrl) })
+      : t('model.none');
     if (models.length && current && !models.some((model) => model.id === current)) {
-      $('modelStatus').textContent += ` "${current}" không có trong danh sách.`;
+      $('modelStatus').textContent += t('model.missing', { model: current });
     }
     await chrome.storage.local.set({ modelCache: { base: apiBase(connection.baseUrl), models } });
   } catch (error) {
     if (load.signal.aborted) return;
-    $('modelStatus').textContent = `Không kiểm tra được: ${error.message || error}`;
+    $('modelStatus').textContent = t('model.failed', { error: error.message || error });
   } finally {
     if (modelLoad === load) {
       modelLoad = null;
@@ -282,7 +308,7 @@ function ensureExecutor() {
     settings,
     persistHost,
     onDetachedByUser: () => {
-      append('error', 'Bạn đã tắt quyền điều khiển tab, tác vụ đã dừng.');
+      append('error', t('chat.detached'));
       stopChat();
     },
   });
@@ -301,7 +327,7 @@ function resetChat() {
   messages = [];
   totals.input = 0;
   totals.output = 0;
-  $('usage').textContent = '';
+  renderUsage();
   executor?.dispose();
   executor = null;
 }
@@ -310,7 +336,7 @@ async function submitTask(text) {
   if (!settings.apiKey) {
     openSettings();
     $('apiKey').focus();
-    append('error', 'Hãy nhập API key trước.');
+    append('error', t('chat.needKey'));
     return;
   }
   append('msg user', text);
@@ -341,13 +367,13 @@ async function submitTask(text) {
             + (usage?.cache_read_input_tokens || 0)
             + (usage?.cache_creation_input_tokens || 0);
           totals.output += usage?.output_tokens || 0;
-          $('usage').textContent = `${totals.input.toLocaleString()} vào · ${totals.output.toLocaleString()} ra`;
+          renderUsage();
         },
       },
     });
-    if (controller.signal.aborted) append('muted', 'Đã dừng.');
+    if (controller.signal.aborted) append('muted', t('chat.stopped'));
   } catch (error) {
-    if (error.name === 'AbortError') append('muted', 'Đã dừng.');
+    if (error.name === 'AbortError') append('muted', t('chat.stopped'));
     else append('error', error.message || String(error));
   } finally {
     controller = null;
@@ -385,12 +411,12 @@ function stopSession(session, byUser = true) {
 
 function sessionExecutor(session) {
   session.executor ??= new BrowserExecutor({
-    confirm: (request) => askUser({ ...request, session }),
+    confirm: (request) => askForSession(session, request),
     settings,
     persistHost,
     ownWindow: true,
     onDetachedByUser: () => {
-      append('error', `Bạn đã tắt quyền điều khiển tab, phiên ${session.label} đã dừng.`);
+      append('error', t('session.detached', { label: session.label }));
       stopSession(session);
     },
   });
@@ -450,13 +476,20 @@ function renderSessions() {
     const tabs = session.executor?.managed.size || 0;
     const meta = document.createElement('span');
     meta.className = 'meta';
-    meta.textContent = `${session.controller ? 'đang điều khiển' : 'đang chờ'} · ${tabs} tab`;
-    row.title = `${session.label} · cổng ${session.port}`;
+    meta.textContent = `${t(session.controller ? 'session.busy' : 'session.idle')} · ${t('session.tabs', { count: tabs })}`;
+    if (session.outdated) {
+      const old = document.createElement('span');
+      old.className = 'outdated';
+      old.textContent = t('session.outdated');
+      old.title = t('session.outdated.title');
+      meta.prepend(old, ' · ');
+    }
+    row.title = t('session.port', { label: session.label, port: session.port });
     const stop = document.createElement('button');
     stop.type = 'button';
     stop.className = 'danger small';
-    stop.textContent = 'Dừng';
-    stop.title = `Dừng phiên ${session.label}`;
+    stop.textContent = t('session.stop');
+    stop.title = t('session.stop.title', { label: session.label });
     stop.disabled = !session.controller;
     stop.addEventListener('click', () => stopSession(session));
     row.append(name, spacer, meta, stop);
@@ -467,14 +500,18 @@ function renderSessions() {
 
   // The rows already show connected sessions; the status line only adds what they don't.
   const base = settings.bridge.port;
-  const lines = list.filter((session) => session.state === 'error').map((session) => `Cổng ${session.port}: ${session.detail}`);
-  if (!connected.length && list.length) lines.unshift(`Đang chờ Claude Code ở cổng ${base}–${base + BRIDGE_PORTS - 1}…`);
+  const lines = list.filter((session) => session.state === 'error').map((session) => t('status.port', { port: session.port, detail: t(session.detail) }));
+  const outdated = connected.filter((session) => session.outdated).map((session) => session.label);
+  if (outdated.length) lines.push(t('status.outdated', { labels: outdated.join(', ') }));
+  if (!connected.length && list.length) lines.unshift(t('status.waiting', { from: base, to: base + BRIDGE_PORTS - 1 }));
   $('bridgeStatus').textContent = lines.join(' ');
   renderHeader();
 }
 
 const helloInfo = () => ({
+  lang: language(),
   mode: settings.mode,
+  confirmIn: settings.confirmIn,
   tools: settings.tools,
   documents: settings.tools.file_upload ? [...attachments].map(([id, file]) => ({ id, name: file.name, size: file.size, type: file.type })) : [],
 });
@@ -500,7 +537,10 @@ function configureBridges() {
           const was = session.state;
           session.state = state;
           session.detail = detail;
-          if (state === 'connected') session.label = info.label || `Claude Code :${sessionPort}`;
+          if (state === 'connected') {
+            session.label = info.label || `Claude Code :${sessionPort}`;
+            session.outdated = Boolean(info.outdated);
+          }
           // A new connection is a new Claude Code session: start it with fresh tabs and approvals.
           if (was === 'connected' && state !== 'connected') {
             session.stopped = false;
@@ -528,8 +568,8 @@ function renderHeader() {
   $('modeLabel').textContent = usage === 'code' && connected > 1 ? `Claude Code ×${connected}` : USAGE_LABEL[usage] || 'Browser Agent';
   $('modeDot').classList.toggle('on', ready);
   $('modeDot').title = usage === 'chat'
-    ? (ready ? 'Đã có API key' : 'Chưa có API key')
-    : (connected ? `${connected} phiên Claude Code đã kết nối` : 'Chưa có phiên Claude Code nào');
+    ? t(ready ? 'header.ready.chat' : 'header.notReady.chat')
+    : (connected ? t('header.ready.code', { count: connected }) : t('header.notReady.code'));
 }
 
 function showWelcome(show) {
@@ -563,6 +603,35 @@ function applyUsage() {
   renderHeader();
 }
 
+// ---- Language ----
+
+function renderUsage() {
+  $('usage').textContent = totals.input || totals.output
+    ? t('usage.tokens', { input: totals.input.toLocaleString(language()), output: totals.output.toLocaleString(language()) })
+    : '';
+}
+
+/** Re-renders everything that shows text; the log keeps the language it was written in. */
+function applyLanguage() {
+  setLanguage(settings.lang);
+  translatePage();
+  for (const button of document.querySelectorAll('[data-lang]')) button.classList.toggle('current', button.dataset.lang === language());
+  renderToolsCount();
+  renderUsage();
+  renderModels(modelList.length ? modelList : [], chosenModel() || settings.model);
+  const hint = $('log').querySelector('.hint');
+  if (hint) hint.textContent = t(`hint.${settings.usage}`);
+  renderSessions();
+  for (const session of sessions.values()) session.client.sendStatus();
+}
+
+async function chooseLanguage(lang) {
+  settings.lang = lang;
+  $('language').value = lang;
+  await saveSettings();
+  applyLanguage();
+}
+
 // ---- Settings form ----
 
 function fillSettings() {
@@ -573,6 +642,8 @@ function fillSettings() {
   $('authType').value = settings.authType;
   renderModels(modelList, settings.model);
   for (const radio of document.querySelectorAll('input[name=mode]')) radio.checked = radio.value === settings.mode;
+  for (const radio of document.querySelectorAll('input[name=confirmIn]')) radio.checked = radio.value === settings.confirmIn;
+  $('language').value = settings.lang;
   $('hosts').value = settings.approvedHosts.join('\n');
   for (const box of document.querySelectorAll('[data-tool]')) box.checked = Boolean(settings.tools[box.dataset.tool]);
   renderToolsCount();
@@ -583,7 +654,7 @@ function fillSettings() {
 
 function renderToolsCount() {
   const on = [...document.querySelectorAll('[data-tool]')].filter((box) => box.checked).length;
-  $('toolsCount').textContent = on ? `(${on} đang bật)` : '(tắt cả)';
+  $('toolsCount').textContent = on ? t('set.tools.on', { count: on }) : t('set.tools.off');
 }
 
 function openSettings() {
@@ -602,6 +673,8 @@ $('settings').addEventListener('submit', async (event) => {
   Object.assign(settings, formConnection());
   settings.model = chosenModel() || DEFAULTS.model;
   settings.mode = document.querySelector('input[name=mode]:checked')?.value || 'ask';
+  settings.confirmIn = document.querySelector('input[name=confirmIn]:checked')?.value || 'terminal';
+  settings.lang = $('language').value;
   settings.approvedHosts = $('hosts').value.split('\n').map((line) => line.trim()).filter(Boolean);
   settings.tools = Object.fromEntries([...document.querySelectorAll('[data-tool]')].map((box) => [box.dataset.tool, box.checked]));
   settings.bridge = {
@@ -609,6 +682,7 @@ $('settings').addEventListener('submit', async (event) => {
     token: $('bridgeToken').value.trim(),
   };
   await saveSettings();
+  applyLanguage();
   applyUsage();
   // Drop approvals so a site removed from the list really loses access.
   if (!controller) {
@@ -641,6 +715,9 @@ for (const box of document.querySelectorAll('[data-tool]')) box.addEventListener
 
 // ---- Header, welcome, composer ----
 
+for (const button of document.querySelectorAll('[data-lang]')) {
+  button.addEventListener('click', () => chooseLanguage(button.dataset.lang));
+}
 $('modeSwitch').addEventListener('click', () => {
   if (settings.usage) showWelcome($('welcome').hidden); // before the first choice there is nothing to go back to
 });
@@ -671,11 +748,11 @@ for (const button of document.querySelectorAll('[data-copy]')) {
     const text = button.previousElementSibling.textContent;
     try {
       await navigator.clipboard.writeText(text);
-      button.textContent = 'Đã chép';
+      button.textContent = t('guide.copied');
     } catch {
-      button.textContent = 'Không chép được';
+      button.textContent = t('guide.copyFailed');
     }
-    setTimeout(() => { button.textContent = 'Sao chép'; }, 1500);
+    setTimeout(() => { button.textContent = t('guide.copy'); }, 1500);
   });
 }
 
@@ -695,7 +772,7 @@ function renderAttachments() {
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'ghost';
-    remove.title = 'Bỏ tệp này';
+    remove.title = t('attach.remove');
     remove.textContent = '×';
     remove.addEventListener('click', () => { attachments.delete(id); renderAttachments(); });
     chip.append(remove);
@@ -710,7 +787,7 @@ $('files').addEventListener('change', () => {
   let total = [...attachments.values()].reduce((sum, file) => sum + file.size, 0);
   for (const file of $('files').files) {
     if (total + file.size > MAX_ATTACH_BYTES) {
-      append('error', `Bỏ qua ${file.name}: tổng dung lượng tệp đính kèm vượt 25 MB.`);
+      append('error', t('attach.tooBig', { name: file.name }));
       continue;
     }
     total += file.size;
@@ -725,9 +802,12 @@ $('files').addEventListener('change', () => {
 (async () => {
   const stored = await chrome.storage.local.get(['settings', 'modelCache']);
   settings = migrate(stored.settings);
+  setLanguage(settings.lang);
+  translatePage();
   if (stored.modelCache?.base === apiBase(settings.baseUrl)) modelList = stored.modelCache.models || [];
   fillSettings();
   applyUsage();
+  applyLanguage();
   showHint();
   if (!settings.usage) showWelcome(true);
   else if (settings.usage === 'chat' && !settings.apiKey) openSettings();
